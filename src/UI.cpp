@@ -672,16 +672,22 @@ void QuickArmorRebalance::RenderUI() {
                         ImGui::TableNextRow();
                         ImGui::TableNextColumn();
                         if (ImGui::Checkbox("Filter by Slot", &bFilterSlots)) g_highlightRound++;
+                        
+                        ImGui::TableNextColumn();
                         ImGui::BeginDisabled(!bFilterSlots);
-                        ImGui::TableNextColumn();
                         if (ImGui::Checkbox("Reverse", &bFilterSlotsReverse)) g_highlightRound++;
+                        ImGui::EndDisabled();  // bFilterSlots
 
                         ImGui::TableNextColumn();
+                        ImGui::BeginDisabled(!bFilterSlots);
                         if (ImGui::Checkbox("Exact", &bFilterSlotsExact)) g_highlightRound++;
+                        ImGui::EndDisabled();  // bFilterSlots
 
                         ImGui::TableNextColumn();
+                        ImGui::BeginDisabled(!bFilterSlots);
                         if (ImGui::Checkbox("Bitwise", &bFilterSlotsBitwise)) g_highlightRound++;
                         ImGui::EndDisabled();  // bFilterSlots
+                        
                         ImGui::EndTable();
                     }
 
