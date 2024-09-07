@@ -72,6 +72,7 @@ struct GivenItems {
                         RE::ActorEquipManager::GetSingleton()->EquipObject(player, item, nullptr, 1,
                                                                            armor->GetEquipSlot(), false, false, false);
                     });
+                    lastEquippedItems.push_back(item);
                 }
             }
         }
@@ -86,8 +87,55 @@ struct GivenItems {
         items.clear();
     }
 
+    void Remove(RE::TESBoundObject* item) {
+        auto player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return;
+
+        player->RemoveItem(item, 1, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
+        RemoveItemIfExists(item);
+    }
+
+    void Unequip(RE::TESBoundObject* item) {
+        auto player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return;
+
+        player->UnequipItem(1, item);
+    }
+
+    void RemoveItemIfExists(RE::TESBoundObject* item) {
+        auto it = std::find(items.begin(), items.end(), item);
+        if (it != items.end()) {
+            items.erase(it);
+        }
+    }
+
+    void RemoveLast() {
+        auto player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return;
+
+        if (!items.empty()) {
+            RE::TESBoundObject* item = items.back();  // Retrieve the last item
+            player->RemoveItem(item, 1, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
+            items.pop_back();  // Remove the last item from the vector
+        }
+    }
+
+    void UndoLast() {
+        if (lastEquippedItems.empty()) return;
+        auto item = lastEquippedItems.back();
+        lastEquippedItems.pop_back();
+        if (lastEquippedItems.empty()) {
+            lastEquippedItems.push_back(item);
+            return;
+        }
+        auto prevItem = items.back();
+
+        Give(prevItem, true); 
+    }
+
     unsigned int recentEquipSlots = 0;
     std::vector<RE::TESBoundObject*> items;
+    std::vector<RE::TESBoundObject*> lastEquippedItems;
 };
 
 bool SliderTable() {
@@ -149,7 +197,6 @@ struct SlotInfo {
 
 using SlotMap = std::unordered_map<uint32_t, SlotInfo>;
 
-// Function to equip an item
 void SetSlotActive(SlotMap& slots, uint32_t slotMask, bool activated) {
     auto it = slots.find(slotMask);
     if (it != slots.end()) {
@@ -459,6 +506,7 @@ void QuickArmorRebalance::RenderUI() {
 
             const char* noMod = "<Currently Worn Armor>";
             static bool bFilterChangedMods = false;
+            static bool bFilterEnableHotkeys = false;
             static bool bFilterAllArmor = false;
             static bool bFilterAllWeapons = false;
 
@@ -540,10 +588,11 @@ void QuickArmorRebalance::RenderUI() {
                 if (ImGui::BeginChild("LeftPane")) {
                     ImGui::PushItemWidth(-FLT_MIN);
 
-                    if (ImGui::BeginTable("Mod Table", 3, ImGuiTableFlags_SizingFixedFit)) {
+                    if (ImGui::BeginTable("Mod Table", 4, ImGuiTableFlags_SizingFixedFit)) {
                         ImGui::TableSetupColumn("ModCol1");
                         ImGui::TableSetupColumn("ModCol2", ImGuiTableColumnFlags_WidthStretch);
                         ImGui::TableSetupColumn("ModCol3");
+                        ImGui::TableSetupColumn("ModCol4");
                         ImGui::TableNextColumn();
 
                         ImGui::Text("Mod");
@@ -644,6 +693,8 @@ void QuickArmorRebalance::RenderUI() {
 
                         ImGui::TableNextColumn();
                         ImGui::Checkbox("Hide modified", &bFilterChangedMods);
+                        ImGui::TableNextColumn();
+                        ImGui::Checkbox("Enable Hotkeys", &bFilterEnableHotkeys);
                         
                         ImGui::EndTable();
                     }
@@ -1112,12 +1163,13 @@ void QuickArmorRebalance::RenderUI() {
 
                 ImGui::TableNextColumn();
                 ImGui::Text("Items");
+                ImGui::NewLine();
 
                 // ImGui::SameLine();
                 // RightButton("Settings");
 
                 auto avail = ImGui::GetContentRegionAvail();
-                avail.y -= ImGui::GetFontSize() * 1 + ImGui::GetStyle().FramePadding.y * 2;
+                avail.y -= ImGui::GetFontSize() * 7 + ImGui::GetStyle().FramePadding.y * 2;
 
                 auto player = RE::PlayerCharacter::GetSingleton();
                 decltype(params.items) finalItems;
@@ -1126,13 +1178,17 @@ void QuickArmorRebalance::RenderUI() {
                 bool modChangesDeleted = g_Data.modifiedFilesDeleted.contains(curMod->mod);
 
                 if (ImGui::BeginListBox("##Items", avail)) {
-                    if (ImGui::BeginPopupContextWindow()) {
-                        if (ImGui::Selectable("Enable all")) uncheckedItems.clear();
-                        if (ImGui::Selectable("Disable all"))
-                            for (auto i : params.items) uncheckedItems.insert(i);
-                        ImGui::Separator();
+                    // Get the index of the last selected item in the list
 
+
+                    if (ImGui::BeginPopupContextWindow()) {
                         ImGui::BeginDisabled(selectedItems.empty());
+                        if (ImGui::Selectable("Unequip selected")) {
+                            for (auto i : selectedItems) givenItems.Unequip(i);
+                        }
+                        if (ImGui::Selectable("Remove selected")) {
+                            for (auto i : selectedItems) givenItems.Remove(i);
+                        }
                         if (ImGui::Selectable("Enable selected")) {
                             for (auto i : selectedItems) uncheckedItems.erase(i);
                         }
@@ -1140,7 +1196,10 @@ void QuickArmorRebalance::RenderUI() {
                             for (auto i : selectedItems) uncheckedItems.insert(i);
                         }
                         ImGui::EndDisabled();
-
+                        ImGui::Separator();
+                        if (ImGui::Selectable("Enable all")) uncheckedItems.clear();
+                        if (ImGui::Selectable("Disable all"))
+                            for (auto i : params.items) uncheckedItems.insert(i);
                         ImGui::EndPopup();
                     }
 
@@ -1211,7 +1270,7 @@ void QuickArmorRebalance::RenderUI() {
                                         }
                                     }
                                 }
-                            } else {
+                            } else {  // Single click
                                 if (!isCtrlDown) selectedItems.clear();
 
                                 if (!isShiftDown) {
@@ -1221,7 +1280,7 @@ void QuickArmorRebalance::RenderUI() {
                                         selectedItems.erase(i);
 
                                     lastSelectedItem = i;
-                                } else {
+                                } else {  // Ctrl
                                     if (lastSelectedItem) {
                                         bool adding = false;
                                         for (auto j : params.items) {
@@ -1240,6 +1299,8 @@ void QuickArmorRebalance::RenderUI() {
                             }
                         }
 
+
+
                         ImGui::PopID();
                         ImGui::EndGroup();
                         ImGui::PopStyleColor(pop);
@@ -1247,42 +1308,179 @@ void QuickArmorRebalance::RenderUI() {
                     ImGui::EndListBox();
                 }
 
-                ImGui::BeginDisabled(!player || (!curMod && (!bFilterAllArmor || !bFilterAllWeapons)) || isInventoryOpen);
+                ImGui::BeginDisabled(!player || (!curMod && (!bFilterAllArmor && !bFilterAllWeapons)) || isInventoryOpen);
+                ImGui::NewLine();
 
-                if (ImGui::Button(selectedItems.empty() ? "Give All" : "Give Selected")) {
-                    if (selectedItems.empty())
-                        for (auto i : params.items) {
-                            givenItems.Give(i);
+                // Other Hotkeys
+                if (bFilterEnableHotkeys && ImGui::IsKeyReleased(ImGui::GetKeyIndex(ImGuiKey_RightArrow))) {
+                    if (!isInventoryOpen) {
+                        if (selectedItems.empty()) {
+                            auto item = params.items.front();
+                            givenItems.Give(item, true);
+                            auto it = std::find(params.items.begin(), params.items.end(), item);
+                            selectedItems.insert(*it);
+                        } else {
+                            auto item = *selectedItems.begin();
+                            auto it = std::find(params.items.begin(), params.items.end(), item);
+                            if (it != params.items.end()) {
+                                it++;
+                                if (it == params.items.end()) it = params.items.begin();
+                                givenItems.Give(*it, true);
+                                selectedItems.clear();
+                                selectedItems.insert(*it);
+                            }
                         }
-                    else
-                        for (auto i : selectedItems) {
-                            givenItems.Give(i);
+                        Sleep(150);
+                    }
+                }
+
+                
+                if (bFilterEnableHotkeys && ImGui::IsKeyReleased(ImGui::GetKeyIndex(ImGuiKey_LeftArrow))) {
+                    if (!isInventoryOpen) {
+                        if (selectedItems.empty()) {
+                            auto item = params.items.front();
+                            givenItems.Give(item, true);
+                            auto it = std::find(params.items.begin(), params.items.end(), item);
+                            selectedItems.insert(*it);
+                        } else {
+                            auto item = *selectedItems.begin();
+                            auto it = std::find(params.items.begin(), params.items.end(), item);
+                            if (it != params.items.end()) {
+                                if (it == params.items.begin()) {
+                                    it = params.items.end() - 1;
+                                } else {
+                                    it--;
+                                }
+                                givenItems.Give(*it, true);
+                                selectedItems.clear();
+                                selectedItems.insert(*it);
+                            }
                         }
+                        Sleep(150);
+                    }
+                }
+
+                // Buttons for entire list
+                if (ImGui::Button("Give All")) {
+                    for (auto i : params.items) {
+                        givenItems.Give(i);
+                    }
                 }
                 if (isInventoryOpen) MakeTooltip("Can't use while inventory is open");
 
                 ImGui::SameLine();
-                if (ImGui::Button(selectedItems.empty() ? "Equip All" : "Equip Selected")) {
+                if (ImGui::Button("Remove All")) {
+                    for (auto i : params.items) {
+                        givenItems.Remove(i);
+                    }
+                }
+                if (isInventoryOpen) MakeTooltip("Can't use while inventory is open");
+
+                ImGui::SameLine();
+                if (ImGui::Button("Equip All")) {
                     givenItems.UnequipCurrent();
-                    if (selectedItems.empty())
-                        for (auto i : params.items) {
-                            givenItems.Give(i, true);
-                        }
-                    else
-                        for (auto i : selectedItems) {
-                            givenItems.Give(i, true);
-                        }
+                    for (auto i : params.items) {
+                        givenItems.Give(i, true);
+                    }
                 }
                 if (isInventoryOpen) MakeTooltip("Can't use while inventory is open");
 
-                ImGui::BeginDisabled(givenItems.items.empty());
                 ImGui::SameLine();
+                if (ImGui::Button("Unequip All")) {
+                    givenItems.UnequipCurrent();
+                    for (auto i : params.items) {
+                        givenItems.Unequip(i);
+                    }
+                }
+                if (isInventoryOpen) MakeTooltip("Can't use while inventory is open");
+
+                // Buttons for Selected
+                ImGui::BeginDisabled(selectedItems.empty());
+                if (ImGui::Button("Give Selected")) {
+                    for (auto i : selectedItems) {
+                         givenItems.Give(i);
+                    }
+                }
+                if (isInventoryOpen) MakeTooltip("Can't use while inventory is open");
+                ImGui::EndDisabled();
+
+                ImGui::SameLine();
+                ImGui::BeginDisabled(selectedItems.empty());
+                if (ImGui::Button("Remove Selected")) {
+                    for (auto i : selectedItems) {
+                        givenItems.Remove(i);
+                    }
+                }
+                if (isInventoryOpen) MakeTooltip("Can't use while inventory is open");
+                ImGui::EndDisabled();
+
+                ImGui::SameLine();
+                ImGui::BeginDisabled(selectedItems.empty());
+                if (ImGui::Button("Equip Selected")) {
+                    for (auto i : selectedItems) {
+                        givenItems.Give(i, true);
+                    }
+                }
+                if (isInventoryOpen) MakeTooltip("Can't use while inventory is open");
+                ImGui::EndDisabled();
+
+                ImGui::SameLine();
+                ImGui::BeginDisabled(selectedItems.empty());
+                if (ImGui::Button("Unequip Selected")) {
+                    for (auto i : selectedItems) {
+                        givenItems.Unequip(i);
+                    }
+                }
+                if (isInventoryOpen) MakeTooltip("Can't use while inventory is open");
+                ImGui::EndDisabled();
+
+                // Buttons for checked
+                if (ImGui::Button("Give Checked")) {
+                    for (auto i : finalItems) {
+                        givenItems.Give(i);
+                    }
+                }
+                if (isInventoryOpen) MakeTooltip("Can't use while inventory is open");
+
+                ImGui::SameLine();
+                if (ImGui::Button("Remove Checked")) {
+                    for (auto i : finalItems) {
+                        givenItems.Remove(i);
+                    }
+                }
+                if (isInventoryOpen) MakeTooltip("Can't use while inventory is open");
+
+                ImGui::SameLine();
+                if (ImGui::Button("Equip Checked")) {
+                    for (auto i : finalItems) {
+                        givenItems.Give(i, true);
+                    }
+                }
+                if (isInventoryOpen) MakeTooltip("Can't use while inventory is open");
+
+                ImGui::SameLine();
+                if (ImGui::Button("Unequip Checked")) {
+                    for (auto i : finalItems) {
+                        givenItems.Unequip(i);
+                    }
+                }
+                if (isInventoryOpen) MakeTooltip("Can't use while inventory is open");
+
+                // Other
+                ImGui::BeginDisabled(givenItems.items.empty());
                 if (ImGui::Button("Delete Given")) {
                     givenItems.Remove();
                 }
                 if (isInventoryOpen) MakeTooltip("Can't use while inventory is open");
-
                 ImGui::EndDisabled();  // givenItems.empty()
+
+                ImGui::SameLine();
+                ImGui::BeginDisabled(givenItems.lastEquippedItems.size() < 2);
+                if (ImGui::Button("Unequip Last")) {
+                    givenItems.UndoLast();
+                }
+                if (isInventoryOpen) MakeTooltip("Can't use while inventory is open");
+                ImGui::EndDisabled();  // givenItems.lastEquippedItems.size() < 2
                 ImGui::EndDisabled();  //! player
 
                 params.items = std::move(finalItems);
