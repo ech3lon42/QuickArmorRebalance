@@ -218,7 +218,7 @@ void QuickArmorRebalance::ProcessData() {
                     switch (cond->data.functionData.function.get()) {
                         case RE::FUNCTION_DATA::FunctionID::kGetItemCount:
                         case RE::FUNCTION_DATA::FunctionID::kGetEquipped:
-                            if (cond->data.functionData.params[0] != obj && recipe->requiredItems.CountObjectsInContainer((RE::TESBoundObject*)cond->data.functionData.params[0])==0) {
+                            if (cond->data.functionData.params[0] != obj && recipe->requiredItems.GetObjectCount((RE::TESBoundObject*)cond->data.functionData.params[0]) == 0) {
                                 //logger::info("{} requires {}", obj->GetName(), ((RE::TESForm*)cond->data.functionData.params[0])->GetName());
                                 recipeConditionForms.insert((RE::TESForm*)cond->data.functionData.params[0]);
                             }

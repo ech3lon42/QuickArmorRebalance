@@ -34,14 +34,14 @@ namespace QuickArmorRebalance {
     void ConfigFileWarning(std::filesystem::path path, const char* str) { logger::warn("{}: {}", path.filename().generic_string(), str); }
 
     RE::TESObjectARMO* BaseArmorSet::FindMatching(RE::TESObjectARMO* w) const {
-        auto slots = (ArmorSlots)w->GetSlotMask();
+        auto slots = (ArmorSlots)w->GetSlotMask().underlying();
 
         auto it = items.begin();
 
         if (slots & kHeadSlotMask)  // Match with any head slot
-            it = std::find_if(items.begin(), items.end(), [=](RE::TESObjectARMO* armor) { return (kHeadSlotMask & (ArmorSlots)armor->GetSlotMask()); });
+            it = std::find_if(items.begin(), items.end(), [=](RE::TESObjectARMO* armor) { return (kHeadSlotMask & (ArmorSlots)armor->GetSlotMask().underlying()); });
         else
-            it = std::find_if(items.begin(), items.end(), [=](RE::TESObjectARMO* armor) { return (slots & (ArmorSlots)armor->GetSlotMask()); });
+            it = std::find_if(items.begin(), items.end(), [=](RE::TESObjectARMO* armor) { return (slots & (ArmorSlots)armor->GetSlotMask().underlying()); });
 
         return it != items.end() ? *it : nullptr;
     }
@@ -840,7 +840,7 @@ bool QuickArmorRebalance::LoadArmorSet(BaseArmorSet& s, const Value& node) {
                             }
 
                             if (auto armor = item->As<RE::TESObjectARMO>()) {
-                                auto slots = (unsigned int)armor->GetSlotMask();
+                                auto slots = (unsigned int)armor->GetSlotMask().underlying();
                                 slots &= ~kCosmeticSlotMask;  // Most or all hats have an extra hair slot to hide
                                                               // it, but shouldn't be using it
 

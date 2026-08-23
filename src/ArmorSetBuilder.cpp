@@ -189,7 +189,7 @@ namespace {
 
         for (auto i : items) {
             if (auto armor = i->As<RE::TESObjectARMO>()) {
-                auto slot = (unsigned int)armor->GetSlotMask();
+                auto slot = (unsigned int)armor->GetSlotMask().underlying();
                 if ((slots & slot) == 0) continue;
                 if ((slot & covered) != 0) continue;
 
@@ -224,13 +224,13 @@ ArmorSet QuickArmorRebalance::BuildSetFrom(RE::TESBoundObject* baseObj, const st
     if (!baseItem) return {};
 
     ArmorSet armorSet;
-    ArmorSlots slots = (ArmorSlots)baseItem->GetSlotMask();
+    ArmorSlots slots = (ArmorSlots)baseItem->GetSlotMask().underlying();
 
     armorSet.push_back(baseItem);
 
     for (auto i : items) {
         if (auto armor = i->As<RE::TESObjectARMO>()) {
-            auto slot = (ArmorSlots)armor->GetSlotMask();
+            auto slot = (ArmorSlots)armor->GetSlotMask().underlying();
             if ((slots & slot)) continue;
 
             auto best = FindBestMatches(baseItem, items, slot, slots);
@@ -239,12 +239,12 @@ ArmorSet QuickArmorRebalance::BuildSetFrom(RE::TESBoundObject* baseObj, const st
             
             if (!best.empty()) {
                 auto one = best.size() == 1 ? best[0] : best[RNG() % best.size()];
-                slots |= (ArmorSlots)one->GetSlotMask();
+                slots |= (ArmorSlots)one->GetSlotMask().underlying();
                 armorSet.push_back(one);
             }            
             } else {
                 //Adds all items
-                for (auto j : best) slots |= (ArmorSlots)j->GetSlotMask();
+                for (auto j : best) slots |= (ArmorSlots)j->GetSlotMask().underlying();
                 armorSet.insert(armorSet.end(), best.begin(), best.end());
             }
 
@@ -306,7 +306,7 @@ void QuickArmorRebalance::AnalyzeArmor(const std::vector<RE::TESBoundObject*>& i
             nArmors++;
 
             unsigned long slot;
-            if (!_BitScanForward(&slot, (ArmorSlots)armor->GetSlotMask())) continue;
+            if (!_BitScanForward(&slot, (ArmorSlots)armor->GetSlotMask().underlying())) continue;
 
             slotData[slot].items.push_back(armor);
             if (slotData[slot].items.size() > 1)  // Only care about a slot if it has more then 1 item to choose from
@@ -472,7 +472,7 @@ void QuickArmorRebalance::AnalyzeArmor(const std::vector<RE::TESBoundObject*>& i
         bool isNonVariant = false;
 
         for (auto armor : ws.items) {
-            auto slots = (ArmorSlots)armor->GetSlotMask();
+            auto slots = (ArmorSlots)armor->GetSlotMask().underlying();
             if (!slots) continue;
 
             auto slot = GetSlotIndex(slots);
@@ -776,7 +776,7 @@ std::size_t QuickArmorRebalance::HashWordSet(const WordSet& set, RE::TESObjectAR
     std::size_t hash = 0;
     if (includeTypeAndSlot) {
         HashStep(hash, (int)armor->bipedModelData.armorType.get());
-        HashStep(hash, (ArmorSlots)armor->GetSlotMask());
+        HashStep(hash, (ArmorSlots)armor->GetSlotMask().underlying());
     }
     for (auto w : set)
         if (w != skip) {

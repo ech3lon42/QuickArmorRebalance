@@ -236,7 +236,7 @@ struct ItemFilter {
 
         if (slots) {
             if (auto armor = obj->As<RE::TESObjectARMO>()) {
-                auto s = MapFindOr(g_Data.modifiedArmorSlots, armor, (ArmorSlots)armor->GetSlotMask());
+                auto s = MapFindOr(g_Data.modifiedArmorSlots, armor, (ArmorSlots)armor->GetSlotMask().underlying());
                 switch (slotMode) {
                     case SlotsAny:
                         if ((s & slots) == 0) return false;
@@ -302,7 +302,7 @@ struct GivenItems {
             for (auto& item : player->GetInventory()) {
                 if (item.second.second->IsWorn() && item.first->IsArmor()) {
                     if (auto i = item.first->As<RE::TESObjectARMO>()) {
-                        // if (((unsigned int)i->GetSlotMask() & g_Config.usedSlotsMask) == 0) {  // Not a slot we interact with - probably physics or such
+                        // if (((unsigned int)i->GetSlotMask().underlying() & g_Config.usedSlotsMask) == 0) {  // Not a slot we interact with - probably physics or such
                         //     continue;
                         // }
 
@@ -335,7 +335,7 @@ struct GivenItems {
         auto player = RE::PlayerCharacter::GetSingleton();
         if (!player) return;
 
-        if (auto armor = item->As<RE::TESObjectARMO>()) recentEquipSlots &= ~(ArmorSlots)armor->GetSlotMask();
+        if (auto armor = item->As<RE::TESObjectARMO>()) recentEquipSlots &= ~(ArmorSlots)armor->GetSlotMask().underlying();
 
         RE::ActorEquipManager::GetSingleton()->UnequipObject(player, item);
         g_Pause.SkipFrame();
@@ -346,7 +346,7 @@ struct GivenItems {
         if (!player) return;
 
         if (auto armor = item->As<RE::TESObjectARMO>()) {
-            auto slots = (unsigned int)armor->GetSlotMask();
+            auto slots = (unsigned int)armor->GetSlotMask().underlying();
             if ((slots & recentEquipSlots) == 0) {
                 recentEquipSlots |= slots;
 
@@ -463,7 +463,7 @@ struct GivenItems {
         while (!items.empty() && items.back().first == t) {
             auto item = items.back().second;
             if (unequip) {
-                if (auto armor = item->As<RE::TESObjectARMO>()) recentEquipSlots &= ~(ArmorSlots)armor->GetSlotMask();
+                if (auto armor = item->As<RE::TESObjectARMO>()) recentEquipSlots &= ~(ArmorSlots)armor->GetSlotMask().underlying();
                 RE::ActorEquipManager::GetSingleton()->UnequipObject(player, item);
             }
 
@@ -631,7 +631,7 @@ bool GetCurrentListItems(std::set<ModData*>& curMod, int nModSpecial, const Item
 bool WillBeModified(const ArmorChangeParams& params, RE::TESBoundObject* i, ArmorSlots remapped) {
     if (params.armorSet) {
         if (auto armor = i->As<RE::TESObjectARMO>()) {
-            if (((remapped | g_Config.slotsWillChange | params.slotsCosmetic) & (ArmorSlots)armor->GetSlotMask()) == 0) return false;
+            if (((remapped | g_Config.slotsWillChange | params.slotsCosmetic) & (ArmorSlots)armor->GetSlotMask().underlying()) == 0) return false;
         } else if (auto weap = i->As<RE::TESObjectWEAP>()) {
             if (!params.armorSet->FindMatching(weap)) return false;
         } else if (auto ammo = i->As<RE::TESAmmo>()) {
@@ -864,7 +864,7 @@ struct RecipeConditionals {
                 switch (cond->data.functionData.function.get()) {
                     case RE::FUNCTION_DATA::FunctionID::kGetItemCount:
                     case RE::FUNCTION_DATA::FunctionID::kGetEquipped:
-                        if (obj->requiredItems.CountObjectsInContainer((RE::TESBoundObject*)cond->data.functionData.params[0]) == 0)
+                        if (obj->requiredItems.GetObjectCount((RE::TESBoundObject*)cond->data.functionData.params[0]) == 0)
                             tempitems.push_back(cond->data.functionData.params[0]);
                         break;
                     case RE::FUNCTION_DATA::FunctionID::kHasPerk:
@@ -2433,7 +2433,7 @@ void QuickArmorRebalance::RenderUI() {
                                         if (params.curve) {
                                             ImGui::Text("Slots:");
                                             ImGui::Indent();
-                                            auto slotsCur = (ArmorSlots)armor->GetSlotMask();
+                                            auto slotsCur = (ArmorSlots)armor->GetSlotMask().underlying();
                                             auto slotsOrig = MapFindOr(g_Data.modifiedArmorSlots, armor, slotsCur);
                                             auto slotsCombined = slotsCur | slotsOrig;
 
@@ -2539,7 +2539,7 @@ void QuickArmorRebalance::RenderUI() {
                     bSlotWarning = false;
                     for (auto i : data.items) {
                         if (auto armor = i->As<RE::TESObjectARMO>()) {
-                            auto itemSlots = MapFindOr(g_Data.modifiedArmorSlots, armor, (ArmorSlots)armor->GetSlotMask());
+                            auto itemSlots = MapFindOr(g_Data.modifiedArmorSlots, armor, (ArmorSlots)armor->GetSlotMask().underlying());
                             if ((~g_Config.usedSlotsMask) & (~remappedSrc) & itemSlots) {
                                 bSlotWarning = true;
                                 break;
@@ -2959,7 +2959,7 @@ void QuickArmorRebalance::RenderUI() {
             std::vector<RE::TESObjectARMO*> lsSlotItems;
             for (auto i : data.items) {
                 if (auto armor = i->As<RE::TESObjectARMO>()) {
-                    auto itemSlots = MapFindOr(g_Data.modifiedArmorSlots, armor, (ArmorSlots)armor->GetSlotMask());
+                    auto itemSlots = MapFindOr(g_Data.modifiedArmorSlots, armor, (ArmorSlots)armor->GetSlotMask().underlying());
                     slotsUsed |= itemSlots;
                     if (itemSlots & ((uint64_t)1 << nSlotView)) lsSlotItems.push_back(armor);
                 }
@@ -3438,7 +3438,7 @@ void QuickArmorRebalance::RenderUI() {
 
                 for (auto i : dataHandler->GetFormArray<RE::TESObjectARMO>()) {
                     for (unsigned int kw = 0; kw < i->numKeywords; kw++) {
-                        auto slots = (ArmorSlots)i->GetSlotMask();
+                        auto slots = (ArmorSlots)i->GetSlotMask().underlying();
                         if (slots)
                             mapKeywordDist[i->GetFile(0)][i->keywords[kw]] |= slots;
                         else
@@ -3514,7 +3514,7 @@ void QuickArmorRebalance::RenderUI() {
                 auto item = i.second[0];
                 ItemGroup* pGroup = nullptr;
                 if (auto armor = item->As<RE::TESObjectARMO>()) {
-                    auto slots = (ArmorSlots)armor->GetSlotMask();
+                    auto slots = (ArmorSlots)armor->GetSlotMask().underlying();
                     if (slots)
                         pGroup = &itemCats[eCatArmor0 + GetSlotIndex(slots)].second;
                     else
@@ -3935,7 +3935,7 @@ void QuickArmorRebalance::RenderUI() {
                             itemsCustomTemp.Pop(true);
                             for (auto i : selected) {
                                 if (auto armor = i->As<RE::TESObjectARMO>()) {
-                                    if ((itemsCustomTemp.recentEquipSlots & (ArmorSlots)armor->GetSlotMask()) == 0) itemsCustomTemp.Give(armor, true);
+                                    if ((itemsCustomTemp.recentEquipSlots & (ArmorSlots)armor->GetSlotMask().underlying()) == 0) itemsCustomTemp.Give(armor, true);
                                 }
                             }
                         }
@@ -3959,7 +3959,7 @@ void QuickArmorRebalance::RenderUI() {
                     uint64_t slotsUsed = 0;
                     for (auto i : selected) {
                         if (auto armor = i->As<RE::TESObjectARMO>()) {
-                            auto slots = (ArmorSlots)armor->GetSlotMask();
+                            auto slots = (ArmorSlots)armor->GetSlotMask().underlying();
                             if (slots)
                                 slotsUsed |= slots;
                             else
