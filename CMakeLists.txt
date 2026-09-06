@@ -28,7 +28,7 @@ if(DEFINED ENV{SKYRIM_MODS_FOLDER} AND IS_DIRECTORY "$ENV{SKYRIM_MODS_FOLDER}")
 endif()
 
 # Otherwise, you can set OUTPUT_FOLDER to any place you'd like :)
-# set(OUTPUT_FOLDER "C:/path/to/any/folder")
+set(OUTPUT_FOLDER "U:/Lorerim447/mods/Quick Armor Rebalance (QAR)")
 
 # Get the .cpp files from your src/ directory
 # to be passed into add_commonlibsse_plugin
@@ -37,7 +37,8 @@ endif()
 #
 # Please note: the official recommendation is to list our every .cpp
 # file individually after SOURCES
-file(GLOB_RECURSE source_files 
+# Note: Added Serialization.cpp for SKSE cosave support
+file(GLOB_RECURSE source_files
     src/*.cpp
     src/ImGui
 )
@@ -52,6 +53,12 @@ target_include_directories(${PROJECT_NAME} PRIVATE include)
 
 find_package(ImGui CONFIG REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE imgui::imgui)
+
+find_path(SIMPLEINI_INCLUDE_DIRS "SimpleIni.h")
+target_include_directories(${PROJECT_NAME} PRIVATE ${SIMPLEINI_INCLUDE_DIRS})
+
+#find_package(ICU 74.2 REQUIRED i18n uc data)
+#target_link_libraries(${PROJECT_NAME} PRIVATE ICU::i18n ICU::uc ICU::data)
 
 add_compile_definitions(_SILENCE_ALL_MS_EXT_DEPRECATION_WARNINGS)
 

@@ -15,6 +15,7 @@
 namespace logger = SKSE::log;
 
 static void (*g_RenderCallback)() = nullptr;
+static void (*g_LoadFontCallback)() = nullptr;
 bool g_showImGui = false;
 bool g_blockInput = true;
 bool g_blockClicks = false;
@@ -33,8 +34,7 @@ public:
         return std::addressof(listener);
     }
 
-    virtual RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_event,
-                                                  RE::BSTEventSource<RE::InputEvent*>* a_eventSource) override;
+    virtual RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>* a_eventSource) override;
 };
 
 // ImGui says to paste the below line
@@ -65,7 +65,9 @@ struct D3DInitHook {
         func();
 
         logger::debug("D3DInit Hooked!");
-        auto render_manager = RE::BSRenderManager::GetSingleton();
+
+        /*
+        auto render_manager = RE::BSGraphics::Renderer::GetSingleton();
         if (!render_manager) {
             logger::error("Cannot find render manager. Initialization failed!");
             return;
@@ -78,6 +80,26 @@ struct D3DInitHook {
             logger::error("Cannot find swapchain. Initialization failed!");
             return;
         }
+        */
+
+        IDXGISwapChain* swapchain = nullptr;
+
+        auto& render_data = RE::BSRenderManager::GetSingleton()->GetRuntimeData();  // RE::BSGraphics::Renderer::GetSingleton()->data;
+        auto device = render_data.forwarder;
+        auto context = render_data.context;
+
+        swapchain = render_data.swapChain;
+
+        /*
+        logger::debug("Getting swapchain");
+        if (REL::Module::GetRuntime() != REL::Module::Runtime::VR) {
+            auto renderWindow = *REL::Relocation<RE::BSGraphics::RendererWindow**>{
+                RELOCATION_ID(524730, 411349)};  // From RE::BSGraphics::Renderer::GetCurrentWindow, but not in the current release
+            swapchain = renderWindow->swapChain;
+        } else {
+            swapchain = render_data.renderWindows[0].swapChain;
+        }
+        */
 
         logger::debug("Getting swapchain desc...");
         DXGI_SWAP_CHAIN_DESC sd{};
@@ -86,15 +108,16 @@ struct D3DInitHook {
             return;
         }
 
-        auto device = render_data.forwarder;
-        auto context = render_data.context;
-
         logger::debug("Initializing ImGui...");
         ImGui::CreateContext();
+
+        logger::debug("ImGui Win32 Init");
         if (!ImGui_ImplWin32_Init(sd.OutputWindow)) {
             logger::error("ImGui initialization failed (Win32)");
             return;
         }
+
+        logger::debug("ImGui DX11 Init");
         if (!ImGui_ImplDX11_Init(device, context)) {
             logger::error("ImGui initialization failed (DX11)");
             return;
@@ -103,8 +126,7 @@ struct D3DInitHook {
 
         // initialized.store(true);
 
-        WndProcHook::func = reinterpret_cast<WNDPROC>(
-            SetWindowLongPtrA(sd.OutputWindow, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(WndProcHook::thunk)));
+        WndProcHook::func = reinterpret_cast<WNDPROC>(SetWindowLongPtrA(sd.OutputWindow, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(WndProcHook::thunk)));
         if (!WndProcHook::func) logger::error("SetWindowLongPtrA failed!");
     }
     static inline REL::Relocation<decltype(thunk)> func;
@@ -117,22 +139,38 @@ struct DXGIPresentHook {
     static void thunk(std::uint32_t a_p1) {
         func(a_p1);
 
-        static int nSkippedFrames = 0;
+        if (g_LoadFontCallback) {
+            g_LoadFontCallback();
+            g_LoadFontCallback = nullptr;
+        }
 
-        ImGui_ImplWin32_NewFrame(); //Let imgui clear out any queued messages and whatnot
+        ImGui_ImplWin32_NewFrame();  // Let imgui clear out any queued messages and whatnot
 
-        //Its best to skip the stuff below if possible, but there's a situation where input messages are queued and not processed until frames are rendered
-        //This forces it to update once in a while to clear out anything queued
-        if (!g_showImGui && nSkippedFrames++<300) return;
-        nSkippedFrames = 0;
+        // Its best to skip the stuff below if possible, but there's a situation where input messages are queued and not processed until frames are rendered
+        // This forces it to update once in a while to clear out anything queued
+        if (!g_showImGui) {
+            ImGui::GetIO().SetAppAcceptingEvents(false);
+            return;
+        }
+        ImGui::GetIO().SetAppAcceptingEvents(true);
 
+        static bool bFirstRender = true;
+        if (bFirstRender) {
+            logger::trace("[ImGui] DXGIPresentHook - First render frame with g_showImGui=true");
+            bFirstRender = false;
+        }
+
+        logger::trace("[ImGui] DXGIPresentHook - Starting frame");
         ImGui_ImplDX11_NewFrame();
         ImGui::NewFrame();
 
+        logger::trace("[ImGui] DXGIPresentHook - Calling RenderCallback");
         if (g_showImGui && g_RenderCallback) g_RenderCallback();
+        logger::trace("[ImGui] DXGIPresentHook - RenderCallback returned");
 
         ImGui::Render();
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+        logger::trace("[ImGui] DXGIPresentHook - Frame complete");
     }
     static inline REL::Relocation<decltype(thunk)> func;
 };
@@ -356,14 +394,15 @@ static ImGuiKey ImGui_ImplWin32_VirtualKeyToImGuiKey(WPARAM wParam) {
     }
 }
 
-//For some reason, RE::CharEvent isn't in the header files, so define a copy
+// For some reason, RE::CharEvent isn't in the header files, so define a copy
 class CharEvent : public RE::InputEvent {
 public:
     uint32_t keyCode;  // 18 (ascii code)
 };
 
-RE::BSEventNotifyControl InputListener::ProcessEvent(RE::InputEvent* const* a_event,
-                                                     RE::BSTEventSource<RE::InputEvent*>*) {
+RE::BSEventNotifyControl InputListener::ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>*) {
+    //logger::trace("ProcessEvent: show={}, events={}", g_showImGui, fmt::ptr(*a_event));
+
     if (!a_event) return RE::BSEventNotifyControl::kContinue;
     if (!g_showImGui) return RE::BSEventNotifyControl::kContinue;
 
@@ -371,111 +410,120 @@ RE::BSEventNotifyControl InputListener::ProcessEvent(RE::InputEvent* const* a_ev
 
     for (auto event = *a_event; event; event = event->next) {
         if (event->eventType == RE::INPUT_EVENT_TYPE::kChar) {
-            io.AddInputCharacter(static_cast<CharEvent*>(event)->keyCode);
+            const auto chr = static_cast<CharEvent*>(event);
+            //logger::trace("Char event: device={}, code={}", (int)chr->device.get(), chr->keyCode);
+
+            io.AddInputCharacter(chr->keyCode);
         } else if (event->eventType == RE::INPUT_EVENT_TYPE::kButton) {
             const auto button = static_cast<RE::ButtonEvent*>(event);
-            if (!button || (button->IsPressed() && !button->IsDown())) continue;
+            // if (!button || (button->IsPressed() && !button->IsDown())) continue;
+
+            //logger::trace("Button event: device={}, code={}, value={} duration={}, pressed={}, down={}", (int)button->device.get(), button->GetIDCode(), button->Value(), button->HeldDuration(), button->IsPressed(), button->IsDown());
 
             auto scan_code = button->GetIDCode();
-            uint32_t key = MapVirtualKeyEx(scan_code, MAPVK_VSC_TO_VK_EX, GetKeyboardLayout(0));
-            switch (scan_code) {
-                case DIK_LEFTARROW:
-                    key = VK_LEFT;
-                    break;
-                case DIK_RIGHTARROW:
-                    key = VK_RIGHT;
-                    break;
-                case DIK_UPARROW:
-                    key = VK_UP;
-                    break;
-                case DIK_DOWNARROW:
-                    key = VK_DOWN;
-                    break;
-                case DIK_DELETE:
-                    key = VK_DELETE;
-                    break;
-                case DIK_END:
-                    key = VK_END;
-                    break;
-                case DIK_HOME:
-                    key = VK_HOME;
-                    break;  // pos1
-                case DIK_PRIOR:
-                    key = VK_PRIOR;
-                    break;  // page up
-                case DIK_NEXT:
-                    key = VK_NEXT;
-                    break;  // page down
-                case DIK_INSERT:
-                    key = VK_INSERT;
-                    break;
-                case DIK_NUMPAD0:
-                    key = VK_NUMPAD0;
-                    break;
-                case DIK_NUMPAD1:
-                    key = VK_NUMPAD1;
-                    break;
-                case DIK_NUMPAD2:
-                    key = VK_NUMPAD2;
-                    break;
-                case DIK_NUMPAD3:
-                    key = VK_NUMPAD3;
-                    break;
-                case DIK_NUMPAD4:
-                    key = VK_NUMPAD4;
-                    break;
-                case DIK_NUMPAD5:
-                    key = VK_NUMPAD5;
-                    break;
-                case DIK_NUMPAD6:
-                    key = VK_NUMPAD6;
-                    break;
-                case DIK_NUMPAD7:
-                    key = VK_NUMPAD7;
-                    break;
-                case DIK_NUMPAD8:
-                    key = VK_NUMPAD8;
-                    break;
-                case DIK_NUMPAD9:
-                    key = VK_NUMPAD9;
-                    break;
-                case DIK_DECIMAL:
-                    key = VK_DECIMAL;
-                    break;
-                case DIK_NUMPADENTER:
-                    key = IM_VK_KEYPAD_ENTER;
-                    break;
-                case DIK_RMENU:
-                    key = VK_RMENU;
-                    break;  // right alt
-                case DIK_RCONTROL:
-                    key = VK_RCONTROL;
-                    break;  // right control
-                case DIK_LWIN:
-                    key = VK_LWIN;
-                    break;  // left win
-                case DIK_RWIN:
-                    key = VK_RWIN;
-                    break;  // right win
-                case DIK_APPS:
-                    key = VK_APPS;
-                    break;
-                default:
-                    break;
-            }
+
+            float buttonValue = !REL::Module::IsVR() ? button->value : *((float*)(0x08 + (char*)&button->value));
+            bool isPressed = buttonValue > 0.0f;
 
             switch (button->device.get()) {
                 case RE::INPUT_DEVICE::kMouse:
                     if (scan_code > 7)  // middle scroll
-                        io.AddMouseWheelEvent(0, button->Value() * (scan_code == 8 ? 1 : -1));
+                        io.AddMouseWheelEvent(0, buttonValue * (scan_code == 8 ? 1 : -1));
                     else {
                         if (scan_code > 5) scan_code = 5;
-                        io.AddMouseButtonEvent(scan_code, button->IsPressed());
+                        io.AddMouseButtonEvent(scan_code, isPressed);
                     }
                     break;
-                case RE::INPUT_DEVICE::kKeyboard:
-                    io.AddKeyEvent(ImGui_ImplWin32_VirtualKeyToImGuiKey(key), button->IsPressed());
-                    break;
+                case RE::INPUT_DEVICE::kKeyboard: {
+                    uint32_t key = 0;
+                    switch (scan_code) {
+                        case DIK_LEFTARROW:
+                            key = VK_LEFT;
+                            break;
+                        case DIK_RIGHTARROW:
+                            key = VK_RIGHT;
+                            break;
+                        case DIK_UPARROW:
+                            key = VK_UP;
+                            break;
+                        case DIK_DOWNARROW:
+                            key = VK_DOWN;
+                            break;
+                        case DIK_DELETE:
+                            key = VK_DELETE;
+                            break;
+                        case DIK_END:
+                            key = VK_END;
+                            break;
+                        case DIK_HOME:
+                            key = VK_HOME;
+                            break;  // pos1
+                        case DIK_PRIOR:
+                            key = VK_PRIOR;
+                            break;  // page up
+                        case DIK_NEXT:
+                            key = VK_NEXT;
+                            break;  // page down
+                        case DIK_INSERT:
+                            key = VK_INSERT;
+                            break;
+                        case DIK_NUMPAD0:
+                            key = VK_NUMPAD0;
+                            break;
+                        case DIK_NUMPAD1:
+                            key = VK_NUMPAD1;
+                            break;
+                        case DIK_NUMPAD2:
+                            key = VK_NUMPAD2;
+                            break;
+                        case DIK_NUMPAD3:
+                            key = VK_NUMPAD3;
+                            break;
+                        case DIK_NUMPAD4:
+                            key = VK_NUMPAD4;
+                            break;
+                        case DIK_NUMPAD5:
+                            key = VK_NUMPAD5;
+                            break;
+                        case DIK_NUMPAD6:
+                            key = VK_NUMPAD6;
+                            break;
+                        case DIK_NUMPAD7:
+                            key = VK_NUMPAD7;
+                            break;
+                        case DIK_NUMPAD8:
+                            key = VK_NUMPAD8;
+                            break;
+                        case DIK_NUMPAD9:
+                            key = VK_NUMPAD9;
+                            break;
+                        case DIK_DECIMAL:
+                            key = VK_DECIMAL;
+                            break;
+                        case DIK_NUMPADENTER:
+                            key = IM_VK_KEYPAD_ENTER;
+                            break;
+                        case DIK_RMENU:
+                            key = VK_RMENU;
+                            break;  // right alt
+                        case DIK_RCONTROL:
+                            key = VK_RCONTROL;
+                            break;  // right control
+                        case DIK_LWIN:
+                            key = VK_LWIN;
+                            break;  // left win
+                        case DIK_RWIN:
+                            key = VK_RWIN;
+                            break;  // right win
+                        case DIK_APPS:
+                            key = VK_APPS;
+                            break;
+                        default:
+                            key = MapVirtualKeyEx(scan_code, MAPVK_VSC_TO_VK_EX, GetKeyboardLayout(0));
+                            break;
+                    }
+                    io.AddKeyEvent(ImGui_ImplWin32_VirtualKeyToImGuiKey(key), isPressed);
+                } break;
                 case RE::INPUT_DEVICE::kGamepad:
                     // not implemented yet
                     // key = GetGamepadIndex((RE::BSWin32GamepadDevice::Key)key);
@@ -483,6 +531,8 @@ RE::BSEventNotifyControl InputListener::ProcessEvent(RE::InputEvent* const* a_ev
                 default:
                     continue;
             }
+        } else {
+            //logger::trace("Other event: device={}, type={}", (int)event->device.get(), (int)event->eventType.get());
         }
     }
 
@@ -506,7 +556,7 @@ struct InputFunc {
 
         if (!g_showImGui)
             block = false;
-        else {       
+        else {
             bool isAltDown = ImGui::IsKeyDown(ImGuiKey_LeftAlt) || ImGui::IsKeyDown(ImGuiKey_RightAlt);
 
             if (!(block = g_blockInput) && (isAltDown || g_blockClicks)) {
@@ -516,8 +566,7 @@ struct InputFunc {
 
                     for (auto event = *a_events; event && !hasClick; event = event->next) {
                         if (event->eventType == RE::INPUT_EVENT_TYPE::kButton) {
-                            if (const auto button = static_cast<RE::ButtonEvent*>(event))
-                            {
+                            if (const auto button = static_cast<RE::ButtonEvent*>(event)) {
                                 switch (button->device.get()) {
                                     case RE::INPUT_DEVICE::kMouse:
                                         hasClick = true;
@@ -534,6 +583,8 @@ struct InputFunc {
         }
 
         if (block) {
+            //logger::trace("Blocking input: show={}", g_showImGui);
+
             constexpr RE::InputEvent* const dummy[] = {nullptr};
             func(a_dispatcher, dummy);
 
@@ -550,15 +601,22 @@ struct InputFunc {
 // Integration entry point
 
 bool ImGuiIntegration::Start(void callback()) {
+    logger::trace("Adding hooks for ImGui integration");
+
     g_RenderCallback = callback;
 
     SKSE::AllocTrampoline(14 * 2);
 
     // D3DInitHook::post_init_callbacks.push_back(postInitCallback);
+    logger::trace("Adding D3DInit hook");
     write_thunk_call<D3DInitHook>();
+
+    logger::trace("Adding DXGIPresent hook");
     write_thunk_call<DXGIPresentHook>();
 
     SKSE::AllocTrampoline(14);
+
+    logger::trace("Adding input hook");
     write_thunk_call<InputFunc>();
 
     ImGui_ImplWin32_EnableDpiAwareness();
@@ -567,6 +625,8 @@ bool ImGuiIntegration::Start(void callback()) {
 }
 
 void ImGuiIntegration::Show(bool toShow) {
+    logger::trace("[ImGui] Show called with toShow={}", toShow);
+
     auto& io = ImGui::GetIO();
 
     io.MouseDrawCursor = toShow;
@@ -574,9 +634,12 @@ void ImGuiIntegration::Show(bool toShow) {
     io.ClearInputKeys();
 
     g_showImGui = toShow;
+    logger::trace("[ImGui] g_showImGui set to {}", toShow);
 }
 
 void ImGuiIntegration::BlockInput(bool toBlock, bool toBlockClicks) {
     g_blockInput = toBlock;
     g_blockClicks = toBlockClicks;
 }
+
+void ImGuiIntegration::LoadFont(void callback()) { g_LoadFontCallback = callback; }
