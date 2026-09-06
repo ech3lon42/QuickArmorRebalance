@@ -82,14 +82,14 @@ struct D3DInitHook {
         }
         */
 
-        IDXGISwapChain* swapchain = nullptr;
 
-        auto& render_data = RE::BSRenderManager::GetSingleton()->GetRuntimeData();  // RE::BSGraphics::Renderer::GetSingleton()->data;
+        auto& render_data = RE::BSGraphics::Renderer::GetSingleton()->GetRuntimeData();
         auto device = render_data.forwarder;
         auto context = render_data.context;
 
-        swapchain = render_data.swapChain;
-
+        //IDXGISwapChain* swapchain = nullptr;
+        //swapchain = render_data.swapChain;
+        auto swapchain = RE::BSGraphics::Renderer::GetCurrentRenderWindow()->swapChain;
         /*
         logger::debug("Getting swapchain");
         if (REL::Module::GetRuntime() != REL::Module::Runtime::VR) {
@@ -102,7 +102,7 @@ struct D3DInitHook {
         */
 
         logger::debug("Getting swapchain desc...");
-        DXGI_SWAP_CHAIN_DESC sd{};
+        REX::W32::DXGI_SWAP_CHAIN_DESC sd{};
         if (swapchain->GetDesc(std::addressof(sd)) < 0) {
             logger::error("IDXGISwapChain::GetDesc failed.");
             return;
@@ -112,13 +112,13 @@ struct D3DInitHook {
         ImGui::CreateContext();
 
         logger::debug("ImGui Win32 Init");
-        if (!ImGui_ImplWin32_Init(sd.OutputWindow)) {
+        if (!ImGui_ImplWin32_Init(sd.outputWindow)) {
             logger::error("ImGui initialization failed (Win32)");
             return;
         }
 
         logger::debug("ImGui DX11 Init");
-        if (!ImGui_ImplDX11_Init(device, context)) {
+        if (!ImGui_ImplDX11_Init(reinterpret_cast<ID3D11Device*>(device), reinterpret_cast<ID3D11DeviceContext*>(context))) {
             logger::error("ImGui initialization failed (DX11)");
             return;
         }
@@ -126,7 +126,7 @@ struct D3DInitHook {
 
         // initialized.store(true);
 
-        WndProcHook::func = reinterpret_cast<WNDPROC>(SetWindowLongPtrA(sd.OutputWindow, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(WndProcHook::thunk)));
+        WndProcHook::func = reinterpret_cast<WNDPROC>(SetWindowLongPtrA(sd.outputWindow, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(WndProcHook::thunk)));
         if (!WndProcHook::func) logger::error("SetWindowLongPtrA failed!");
     }
     static inline REL::Relocation<decltype(thunk)> func;
@@ -422,7 +422,7 @@ RE::BSEventNotifyControl InputListener::ProcessEvent(RE::InputEvent* const* a_ev
 
             auto scan_code = button->GetIDCode();
 
-            float buttonValue = !REL::Module::IsVR() ? button->value : *((float*)(0x08 + (char*)&button->value));
+            float buttonValue = button->Value();   //! REL::Module::IsVR() ? button->value : *((float*)(0x08 + (char*)&button->value));
             bool isPressed = buttonValue > 0.0f;
 
             switch (button->device.get()) {
@@ -588,7 +588,7 @@ struct InputFunc {
             constexpr RE::InputEvent* const dummy[] = {nullptr};
             func(a_dispatcher, dummy);
 
-            RE::PlayerCamera::GetSingleton()->idleTimer = 0;  // Force reset idle to prevent vanity camera
+            RE::PlayerCamera::GetSingleton()->GetRuntimeData2().idleTimer = 0;  // Force reset idle to prevent vanity camera
 
         } else
             func(a_dispatcher, a_events);

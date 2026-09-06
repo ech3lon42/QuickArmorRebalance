@@ -78,7 +78,7 @@ void QuickArmorRebalance::ExportToDAV(const RE::TESFile* file, const Value& ls, 
             auto armorBase = RE::TESForm::LookupByID<RE::TESObjectARMO>(GetFullId(file, (RE::FormID)set.first));
             if (!armorBase) continue;
 
-            auto slots = (ArmorSlots)armorBase->GetSlotMask();
+            auto slots = (ArmorSlots)armorBase->GetSlotMask().underlying();
             if (!slots) continue;
 
             std::erase(set.second, nullptr);

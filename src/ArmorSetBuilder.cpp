@@ -189,7 +189,7 @@ namespace {
 
         for (auto i : items) {
             if (auto armor = i->As<RE::TESObjectARMO>()) {
-                auto slot = (unsigned int)armor->GetSlotMask();
+                auto slot = (unsigned int)armor->GetSlotMask().underlying();
                 if ((slots & slot) == 0) continue;
                 if ((slot & covered) != 0) continue;
 
@@ -219,23 +219,34 @@ namespace {
     }
 }
 
-ArmorSet QuickArmorRebalance::BuildSetFrom(RE::TESBoundObject* baseObj, const std::vector<RE::TESBoundObject*>& items) {
+ArmorSet QuickArmorRebalance::BuildSetFrom(RE::TESBoundObject* baseObj, const std::vector<RE::TESBoundObject*>& items, bool bLimit) {
     auto baseItem = baseObj->As<RE::TESObjectARMO>();
     if (!baseItem) return {};
 
     ArmorSet armorSet;
-    unsigned int slots = (unsigned int)baseItem->GetSlotMask();
+    ArmorSlots slots = (ArmorSlots)baseItem->GetSlotMask().underlying();
 
     armorSet.push_back(baseItem);
 
     for (auto i : items) {
         if (auto armor = i->As<RE::TESObjectARMO>()) {
-            auto slot = (unsigned int)armor->GetSlotMask();
+            auto slot = (ArmorSlots)armor->GetSlotMask().underlying();
             if ((slots & slot)) continue;
 
             auto best = FindBestMatches(baseItem, items, slot, slots);
-            for (auto j : best) slots |= (unsigned int)j->GetSlotMask();
-            armorSet.insert(armorSet.end(), best.begin(), best.end());
+
+            if (bLimit) {
+                if (!best.empty()) {
+                    auto one = best.size() == 1 ? best[0] : best[RNG() % best.size()];
+                    slots |= (ArmorSlots)one->GetSlotMask().underlying();
+                    armorSet.push_back(one);
+                }
+            } else {
+                // Adds all items
+                for (auto j : best) slots |= (ArmorSlots)j->GetSlotMask().underlying();
+                armorSet.insert(armorSet.end(), best.begin(), best.end());
+            }
+
         }
     }
 
@@ -294,7 +305,7 @@ void QuickArmorRebalance::AnalyzeArmor(const std::vector<RE::TESBoundObject*>& i
             nArmors++;
 
             unsigned long slot;
-            if (!_BitScanForward(&slot, (ArmorSlots)armor->GetSlotMask())) continue;
+            if (!_BitScanForward(&slot, (ArmorSlots)armor->GetSlotMask().underlying())) continue;
 
             slotData[slot].items.push_back(armor);
             if (slotData[slot].items.size() > 1)  // Only care about a slot if it has more then 1 item to choose from
@@ -460,7 +471,7 @@ void QuickArmorRebalance::AnalyzeArmor(const std::vector<RE::TESBoundObject*>& i
         bool isNonVariant = false;
 
         for (auto armor : ws.items) {
-            auto slots = (ArmorSlots)armor->GetSlotMask();
+            auto slots = (ArmorSlots)armor->GetSlotMask().underlying();
             if (!slots) continue;
 
             auto slot = GetSlotIndex(slots);
@@ -764,7 +775,7 @@ std::size_t QuickArmorRebalance::HashWordSet(const WordSet& set, RE::TESObjectAR
     std::size_t hash = 0;
     if (includeTypeAndSlot) {
         HashStep(hash, (int)armor->bipedModelData.armorType.get());
-        HashStep(hash, (ArmorSlots)armor->GetSlotMask());
+        HashStep(hash, (ArmorSlots)armor->GetSlotMask().underlying());
     }
     for (auto w : set)
         if (w != skip) {
@@ -785,7 +796,7 @@ DynamicVariantSets QuickArmorRebalance::MapVariants(AnalyzeResults& results, con
         VariantSetMap mapVariants;
         for (auto i : results.mapArmorWords) {
             // logger::trace("Hashing {}:", i.first->GetName());
-            // logger::trace("Slots {}:", (ArmorSlots)i.first->GetSlotMask());
+            // logger::trace("Slots {}:", (ArmorSlots)i.first->GetSlotMask().underlying());
             auto hash = HashWordSet(i.second, i.first);
             mapVariants[hash].clear();  // prevent duplicates
             mapVariants[hash].push_back(i.first);
@@ -796,7 +807,7 @@ DynamicVariantSets QuickArmorRebalance::MapVariants(AnalyzeResults& results, con
 
             for (auto item : items) {
                 // logger::trace("Hashing {} (skip {}):", item->GetName(), results.mapWordStrings[w]);
-                // logger::trace("Slots {}:", (ArmorSlots)item->GetSlotMask());
+                // logger::trace("Slots {}:", (ArmorSlots)item->GetSlotMask().underlying());
                 auto hash = HashWordSet(results.mapArmorWords[item], item, w);
                 mapVariants[hash].push_back(item);
                 // logger::trace("Set size: {}", mapVariants[hash].size());
@@ -922,10 +933,10 @@ std::map<std::string, std::vector<RE::TESBoundObject*>> QuickArmorRebalance::Gro
         if (i.second.size() < 2) return true;
 
         auto type = i.second[0]->bipedModelData.armorType.get();
-        auto slots = i.second[0]->GetSlotMask();
+        auto slots = i.second[0]->GetSlotMask().underlying();
 
         for (auto j : i.second) {
-            if (type != j->bipedModelData.armorType.get() || slots != j->GetSlotMask()) return true;
+            if (type != j->bipedModelData.armorType.get() || slots != j->GetSlotMask().underlying()) return true;
         }
 
         return false;

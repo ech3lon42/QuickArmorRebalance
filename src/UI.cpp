@@ -266,7 +266,7 @@ struct ItemFilter {
 
         if (slots) {
             if (auto armor = obj->As<RE::TESObjectARMO>()) {
-                auto s = MapFindOr(g_Data.modifiedArmorSlots, armor, (ArmorSlots)armor->GetSlotMask());
+                auto s = MapFindOr(g_Data.modifiedArmorSlots, armor, (ArmorSlots)armor->GetSlotMask().underlying());
                 switch (slotMode) {
                     case SlotsAny:
                         if ((s & slots) == 0) return false;
@@ -529,7 +529,7 @@ struct GivenItems {
         auto player = RE::PlayerCharacter::GetSingleton();
         if (!player) return;
 
-        if (auto armor = item->As<RE::TESObjectARMO>()) recentEquipSlots &= ~(ArmorSlots)armor->GetSlotMask();
+        if (auto armor = item->As<RE::TESObjectARMO>()) recentEquipSlots &= ~(ArmorSlots)armor->GetSlotMask().underlying();
 
         RE::ActorEquipManager::GetSingleton()->UnequipObject(player, item);
         g_EquipmentChanged = true;  // Signal cache refresh needed
@@ -543,7 +543,7 @@ struct GivenItems {
         if (!player) return;
 
         if (auto armor = item->As<RE::TESObjectARMO>()) {
-            auto slots = (unsigned int)armor->GetSlotMask();
+            auto slots = (unsigned int)armor->GetSlotMask().underlying();
             if ((slots & recentEquipSlots) == 0) {
                 recentEquipSlots |= slots;
 
@@ -559,6 +559,7 @@ struct GivenItems {
         for (int f = 0; f < static_cast<int>(g_Config.outfitFrameMultiplier); f++) {
             g_Pause.SkipFrame();
         }
+
     }
 
     void Restore() {
@@ -727,7 +728,7 @@ struct GivenItems {
         while (!items.empty() && items.back().first == t) {
             auto item = items.back().second;
             if (unequip) {
-                if (auto armor = item->As<RE::TESObjectARMO>()) recentEquipSlots &= ~(ArmorSlots)armor->GetSlotMask();
+                if (auto armor = item->As<RE::TESObjectARMO>()) recentEquipSlots &= ~(ArmorSlots)armor->GetSlotMask().underlying();
                 RE::ActorEquipManager::GetSingleton()->UnequipObject(player, item);
             }
 
@@ -1055,7 +1056,7 @@ struct ItemSlotInfo {
             return info;
         }
 
-        auto slots = (ArmorSlots)armor->GetSlotMask();
+        auto slots = (ArmorSlots)armor->GetSlotMask().underlying();
         if (!slots) {
             return info;
         }
@@ -1544,7 +1545,7 @@ bool GetCurrentListItems(std::set<ModData*>& curMod, int nModSpecial, const Item
 bool WillBeModified(const ArmorChangeParams& params, RE::TESBoundObject* i, ArmorSlots remapped) {
     if (params.armorSet) {
         if (auto armor = i->As<RE::TESObjectARMO>()) {
-            if (((remapped | g_Config.slotsWillChange) & (ArmorSlots)armor->GetSlotMask()) == 0) return false;
+            if (((remapped | g_Config.slotsWillChange | params.slotsCosmetic) & (ArmorSlots)armor->GetSlotMask().underlying()) == 0) return false;
         } else if (auto weap = i->As<RE::TESObjectWEAP>()) {
             if (!params.armorSet->FindMatching(weap)) return false;
         } else if (auto ammo = i->As<RE::TESAmmo>()) {
@@ -1777,7 +1778,7 @@ struct RecipeConditionals {
                 switch (cond->data.functionData.function.get()) {
                     case RE::FUNCTION_DATA::FunctionID::kGetItemCount:
                     case RE::FUNCTION_DATA::FunctionID::kGetEquipped:
-                        if (obj->requiredItems.CountObjectsInContainer((RE::TESBoundObject*)cond->data.functionData.params[0]) == 0)
+                        if (obj->requiredItems.GetObjectCount((RE::TESBoundObject*)cond->data.functionData.params[0]) == 0)
                             tempitems.push_back(cond->data.functionData.params[0]);
                         break;
                     case RE::FUNCTION_DATA::FunctionID::kHasPerk:
@@ -1812,7 +1813,7 @@ struct RecipeConditionals {
     bool bListsBuilt = false;
     bool bRefreshed = false;
 
-    void AddFromItem(RE::TESBoundObject* item, Conditionals PurposeConditionals::*which) {
+    void AddFromItem(RE::TESBoundObject* item, Conditionals PurposeConditionals::* which) {
         if (auto cond = MapFindOrNull(g_Data.temperRecipe, item)) {
             (temper.*which).AddFrom(cond);
         }
@@ -1962,7 +1963,7 @@ void QuickArmorRebalance::RenderUI() {
                 auto armor = item->As<RE::TESObjectARMO>();
                 if (!armor) continue;
 
-                const auto slots = static_cast<ArmorSlots>(armor->GetSlotMask());
+                const auto slots = static_cast<ArmorSlots>(armor->GetSlotMask().underlying());
                 if (!slots) continue;
 
                 int priority = 3;
@@ -1982,7 +1983,7 @@ void QuickArmorRebalance::RenderUI() {
         }
 
         static void EquipMatchingSet(RE::TESBoundObject* baseItem, const std::vector<RE::TESBoundObject*>& items) {
-            auto armorSet = BuildSetFrom(baseItem, items);
+            auto armorSet = BuildSetFrom(baseItem, items, true);
             if (armorSet.empty()) return;
 
             givenItems.UnequipCurrent();
@@ -2171,7 +2172,7 @@ void QuickArmorRebalance::RenderUI() {
 
                             ImGui::EndCombo();
 
-                            //data.isWornArmor = curMod.empty();
+                            // data.isWornArmor = curMod.empty();
 
                             if (blacklist) g_Config.AddUserBlacklist(blacklist);
                         }
@@ -2187,8 +2188,7 @@ void QuickArmorRebalance::RenderUI() {
                                 ImGui::Text(LZ("Changes will not revert until after restarting Skyrim"));
 
                                 if (ImGui::Button(LZ("Delete changes"), ImVec2(120, 0))) {
-                                    for(auto i : curMod)
-                                        DeleteAllChanges(i->mod);
+                                    for (auto i : curMod) DeleteAllChanges(i->mod);
                                     ImGui::CloseCurrentPopup();
                                 }
                                 ImGui::SetItemDefaultFocus();
@@ -2730,7 +2730,7 @@ void QuickArmorRebalance::RenderUI() {
 
                     // Distribution
                     ImGui::Separator();
-                    //ImGui::BeginDisabled(curMod.empty());  // || !params.armorSet);
+                    // ImGui::BeginDisabled(curMod.empty());  // || !params.armorSet);
 
                     // Need to create a dummy table to negate stretching the combo boxes
                     ImGui::Checkbox(LZ("Distribute as "), &params.bDistribute);
@@ -2839,12 +2839,12 @@ void QuickArmorRebalance::RenderUI() {
                     MakeTooltip(
                         LZ("Attempts to match sets together - for example, if there are green and blue variants, it will\n"
                            "try to distribute only green or only blue parts as a single set"));
-                    ImGui::EndDisabled(); //!params.bDistAsSet
+                    ImGui::EndDisabled();  //! params.bDistAsSet
 
                     hlDynamicVariants.Push(!analyzeResults.sets[AnalyzeResults::eWords_DynamicVariants].empty() ||
                                            !analyzeResults.sets[AnalyzeResults::eWords_EitherVariants].empty());
 
-                    ImGui::EndDisabled(); //!params.bDistribute
+                    ImGui::EndDisabled();  //! params.bDistribute
                     ImGui::SameLine();
 
                     if (ImGui::Button(LZ("Dynamic Variants"))) {
@@ -3897,7 +3897,7 @@ void QuickArmorRebalance::RenderUI() {
                                                                 if (params.curve) {
                                                                     ImGui::Text("Slots:");
                                                                     ImGui::Indent();
-                                                                    auto slotsCur = (ArmorSlots)armor->GetSlotMask();
+                                                                    auto slotsCur = (ArmorSlots)armor->GetSlotMask().underlying();
                                                                     auto slotsOrig = MapFindOr(g_Data.modifiedArmorSlots, armor, slotsCur);
                                                                     auto slotsCombined = slotsCur | slotsOrig;
 
@@ -5116,6 +5116,7 @@ void QuickArmorRebalance::RenderUI() {
                         ImGui::EndDisabled();
 
                         ImGui::EndTable();
+
                     }
 
                     if (!recipeConds.bRefreshed) recipeConds.bListsBuilt = false;
@@ -5143,7 +5144,7 @@ void QuickArmorRebalance::RenderUI() {
                     data.items.clear();
                     data.items.reserve(data.filteredItems.size());
 
-                    //bool modChangesDeleted = curMod ? g_Data.modifiedFilesDeleted.contains(curMod->mod) : false;
+                    // bool modChangesDeleted = curMod ? g_Data.modifiedFilesDeleted.contains(curMod->mod) : false;
 
                     ImGui::PushStyleColor(ImGuiCol_NavHighlight, IM_COL32(0, 255, 0, 255));
 
@@ -5530,7 +5531,7 @@ void QuickArmorRebalance::RenderUI() {
                                     if (isShiftDown) {
                                         if (isAltDown) {
                                             auto allItems = g_MainItemsCache.GetAllSortedItems();
-                                            auto armorSet = BuildSetFrom(i, allItems);
+                                            auto armorSet = BuildSetFrom(i, allItems, true);
 
                                             if (!isCtrlDown) selectedItems.clear();
                                             for (auto piece : armorSet) selectedItems.insert(piece);
@@ -5697,7 +5698,7 @@ void QuickArmorRebalance::RenderUI() {
                                         if (params.curve) {
                                             ImGui::Text("Slots:");
                                             ImGui::Indent();
-                                            auto slotsCur = (ArmorSlots)armor->GetSlotMask();
+                                            auto slotsCur = (ArmorSlots)armor->GetSlotMask().underlying();
                                             auto slotsOrig = MapFindOr(g_Data.modifiedArmorSlots, armor, slotsCur);
                                             auto slotsCombined = slotsCur | slotsOrig;
 
@@ -6245,6 +6246,7 @@ void QuickArmorRebalance::RenderUI() {
                         givenItems.Remove();
                     }
                     if (isInventoryOpen) MakeTooltip(LZ("Can't use while inventory is open"));
+
                     ImGui::EndDisabled();  // givenItems.empty()
 
                     ImGui::EndDisabled();  //! player || curMod.empty() || isInventoryOpen
@@ -6292,7 +6294,7 @@ void QuickArmorRebalance::RenderUI() {
                     bSlotWarning = false;
                     for (auto i : data.items) {
                         if (auto armor = i->As<RE::TESObjectARMO>()) {
-                            auto itemSlots = MapFindOr(g_Data.modifiedArmorSlots, armor, (ArmorSlots)armor->GetSlotMask());
+                            auto itemSlots = MapFindOr(g_Data.modifiedArmorSlots, armor, (ArmorSlots)armor->GetSlotMask().underlying());
                             if ((~g_Config.usedSlotsMask) & (~remappedSrc) & itemSlots) {
                                 bSlotWarning = true;
                                 break;
@@ -6948,7 +6950,7 @@ void QuickArmorRebalance::RenderUI() {
             std::vector<RE::TESObjectARMO*> lsSlotItems;
             for (auto i : data.items) {
                 if (auto armor = i->As<RE::TESObjectARMO>()) {
-                    auto itemSlots = MapFindOr(g_Data.modifiedArmorSlots, armor, (ArmorSlots)armor->GetSlotMask());
+                    auto itemSlots = MapFindOr(g_Data.modifiedArmorSlots, armor, (ArmorSlots)armor->GetSlotMask().underlying());
                     slotsUsed |= itemSlots;
                     if (itemSlots & ((uint64_t)1 << nSlotView)) lsSlotItems.push_back(armor);
                 }
@@ -6965,11 +6967,12 @@ void QuickArmorRebalance::RenderUI() {
             ImGui::PushItemWidth(-FLT_MIN);
 
             if (ImGui::BeginTable(
-                    "Slot Mapping", 3,
+                    "Slot Mapping", 4,
                     ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_PreciseWidths | ImGuiTableFlags_ScrollY)) {
                 ImGui::TableSetupColumn(LZ("Original"));
                 ImGui::TableSetupColumn(LZ("Items"), ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableSetupColumn(LZ("Remapped"));
+                ImGui::TableSetupColumn(LZ("Cosmetic"));
 
                 ImGui::TableHeadersRow();
                 ImGui::TableNextRow();
@@ -6990,15 +6993,19 @@ void QuickArmorRebalance::RenderUI() {
                         if ((((uint64_t)1 << i) & remappedSrc)) {
                             ImGui::PushStyleColor(ImGuiCol_Text, colorChanged);
                             popCol++;
-                        } else if ((((uint64_t)1 << i) & slotsUsed & ~(uint64_t)g_Config.usedSlotsMask)) {
-                            ImGui::PushStyleColor(ImGuiCol_Text, colorDeleted);
-                            strWarn = LZ("Warning: Items in this slot will not be changed unless remapped to another slot.");
-                            popCol++;
                         } else if ((1ull << i) & slotsUsed & (remappedTar & ~remappedSrc)) {
                             ImGui::PushStyleColor(ImGuiCol_Text, colorDeleted);
                             strWarn =
                                 LZ("Warning: Other items are being remapped to this slot.\n"
                                    "This will cause conflicts unless this slot is also remapped.");
+                            popCol++;
+                        } else if ((1ull << i) & slotsUsed & params.slotsCosmetic) {
+                            ImGui::PushStyleColor(ImGuiCol_Text, colorChangedShared);
+                            strWarn = LZ("Items in this slot will be made cosmetic.");
+                            popCol++;
+                        } else if ((((uint64_t)1 << i) & slotsUsed & ~(uint64_t)g_Config.usedSlotsMask)) {
+                            ImGui::PushStyleColor(ImGuiCol_Text, colorDeleted);
+                            strWarn = LZ("Warning: Items in this slot will not be changed unless remapped to another slot.");
                             popCol++;
                         }
 
@@ -7042,7 +7049,7 @@ void QuickArmorRebalance::RenderUI() {
                     if (i < lsSlotItems.size()) ImGui::Text(lsSlotItems[i]->GetName());
 
                     ImGui::TableNextColumn();
-                    auto bDisabled = i != 32 && ((1 << i) & g_Config.usedSlotsMask) == 0;
+                    auto bDisabled = i != 32 && ((1 << i) & (g_Config.usedSlotsMask | params.slotsCosmetic)) == 0;
                     ImGui::BeginDisabled(bProtected || bDisabled);
                     ImGui::BeginGroup();
 
@@ -7055,6 +7062,9 @@ void QuickArmorRebalance::RenderUI() {
                         popCol++;
                     } else if ((((uint64_t)1 << i) & remappedTar)) {
                         ImGui::PushStyleColor(ImGuiCol_Text, colorChanged);
+                        popCol++;
+                    } else if ((((uint64_t)1 << i) & params.slotsCosmetic)) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, colorChangedShared);
                         popCol++;
                     }
 
@@ -7087,6 +7097,30 @@ void QuickArmorRebalance::RenderUI() {
                     ImGui::EndGroup();
 
                     ImGui::EndDisabled();
+
+                    ImGui::TableNextColumn();
+                    if (i < 32) {
+                        ImGui::PushID("Target");
+                        ImGui::PushID(i);
+                        bool bCosmetic = !!(params.slotsCosmetic & (1 << i));
+                        if (ImGui::Checkbox("##Cosmetic", &bCosmetic)) {
+                            if (bCosmetic) {
+                                params.slotsCosmetic |= (1 << i);
+                                if (isCtrlDown) g_Config.slotsDefaultCosmetic |= (1 << i);
+                            } else {
+                                params.slotsCosmetic &= ~(1 << i);
+                                if (isCtrlDown) g_Config.slotsDefaultCosmetic &= ~(1 << i);
+                            }
+                        }
+                        MakeTooltip(
+                            LZ("Items with only cosmetic slots will have armor rating, value, and weight reduced to zero,\n"
+                               "but still occupy an armor slot.\n\n"
+                               "Holding Ctrl while clicking will also change the default setting for this slot."));
+
+                        ImGui::PopID();
+                        ImGui::PopID();
+                    }
+
                     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) nSlotView = i;
                 }
 
@@ -7397,7 +7431,7 @@ void QuickArmorRebalance::RenderUI() {
                     auto file = i->GetFile(0);
                     if (!file) continue;  // Skip dynamic items without source file
                     for (unsigned int kw = 0; kw < i->numKeywords; kw++) {
-                        auto slots = (ArmorSlots)i->GetSlotMask();
+                        auto slots = (ArmorSlots)i->GetSlotMask().underlying();
                         if (slots)
                             mapKeywordDist[file][i->keywords[kw]] |= slots;
                         else
@@ -7477,7 +7511,7 @@ void QuickArmorRebalance::RenderUI() {
                 auto item = i.second[0];
                 ItemGroup* pGroup = nullptr;
                 if (auto armor = item->As<RE::TESObjectARMO>()) {
-                    auto slots = (ArmorSlots)armor->GetSlotMask();
+                    auto slots = (ArmorSlots)armor->GetSlotMask().underlying();
                     if (slots)
                         pGroup = &itemCats[eCatArmor0 + GetSlotIndex(slots)].second;
                     else
@@ -7900,7 +7934,7 @@ void QuickArmorRebalance::RenderUI() {
                             itemsCustomTemp.Pop(true);
                             for (auto i : selected) {
                                 if (auto armor = i->As<RE::TESObjectARMO>()) {
-                                    if ((itemsCustomTemp.recentEquipSlots & (ArmorSlots)armor->GetSlotMask()) == 0) itemsCustomTemp.Give(armor, true);
+                                    if ((itemsCustomTemp.recentEquipSlots & (ArmorSlots)armor->GetSlotMask().underlying()) == 0) itemsCustomTemp.Give(armor, true);
                                 }
                             }
                         }
@@ -7924,7 +7958,7 @@ void QuickArmorRebalance::RenderUI() {
                     uint64_t slotsUsed = 0;
                     for (auto i : selected) {
                         if (auto armor = i->As<RE::TESObjectARMO>()) {
-                            auto slots = (ArmorSlots)armor->GetSlotMask();
+                            auto slots = (ArmorSlots)armor->GetSlotMask().underlying();
                             if (slots)
                                 slotsUsed |= slots;
                             else

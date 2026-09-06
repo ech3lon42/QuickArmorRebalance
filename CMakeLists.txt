@@ -15,7 +15,7 @@ project(QuickArmorRebalance VERSION 0.0.1 LANGUAGES CXX)
 # To do this automatically, set the `SKYRIM_FOLDER` environment variable
 # to the path of your Skyrim Special Edition folder
 if(DEFINED ENV{SKYRIM_FOLDER} AND IS_DIRECTORY "$ENV{SKYRIM_FOLDER}/Data")
-    set(OUTPUT_FOLDER "$ENV{SKYRIM_FOLDER}/Data")
+    set(QAR_DEFAULT_OUTPUT_FOLDER "$ENV{SKYRIM_FOLDER}/Data")
 endif()
 
 # If you're using Mod Organizer 2 or Vortex, you might want this to go inside
@@ -24,11 +24,11 @@ endif()
 # To do this automatically, set the `SKYRIM_MODS_FOLDER` environment variable
 # to the path of your "mods" folder
 if(DEFINED ENV{SKYRIM_MODS_FOLDER} AND IS_DIRECTORY "$ENV{SKYRIM_MODS_FOLDER}")
-    set(OUTPUT_FOLDER "$ENV{SKYRIM_MODS_FOLDER}/${PROJECT_NAME}")
+    set(QAR_DEFAULT_OUTPUT_FOLDER "$ENV{SKYRIM_MODS_FOLDER}/${PROJECT_NAME}")
 endif()
 
 # Otherwise, you can set OUTPUT_FOLDER to any place you'd like :)
-set(OUTPUT_FOLDER "U:/Lorerim447/mods/Quick Armor Rebalance (QAR)")
+set(OUTPUT_FOLDER "${QAR_DEFAULT_OUTPUT_FOLDER}" CACHE PATH "Optional game/mod folder for automatic deployment")
 
 # Get the .cpp files from your src/ directory
 # to be passed into add_commonlibsse_plugin
@@ -43,13 +43,17 @@ file(GLOB_RECURSE source_files
     src/ImGui
 )
 
+option(BUILD_TESTS "Build CommonLib dependency tests" OFF)
+add_subdirectory(lib/commonlibsse-ng)
+include(lib/commonlibsse-ng/cmake/CommonLibSSE.cmake)
+
 # Setup your SKSE plugin as an SKSE plugin!
-find_package(CommonLibSSE CONFIG REQUIRED)
+#find_package(CommonLibSSE CONFIG REQUIRED)
 add_commonlibsse_plugin(${PROJECT_NAME} SOURCES ${source_files} src/plugin.cpp)
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23) # <--- use C++23 standard
 target_precompile_headers(${PROJECT_NAME} PRIVATE src/PCH.h) # <--- PCH.h is required!
 target_include_directories(${PROJECT_NAME} PRIVATE include)
-
+#target_link_libraries(${PROJECT_NAME} PUBLIC CommonLibSSE::CommonLibSSE)
 
 find_package(ImGui CONFIG REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE imgui::imgui)
@@ -64,7 +68,7 @@ add_compile_definitions(_SILENCE_ALL_MS_EXT_DEPRECATION_WARNINGS)
 
 # When your SKSE .dll is compiled, this will automatically copy the .dll into your mods folder.
 # Only works if you configure DEPLOY_ROOT above (or set the SKYRIM_MODS_FOLDER environment variable)
-if(DEFINED OUTPUT_FOLDER)
+if(OUTPUT_FOLDER)
     # If you specify an <OUTPUT_FOLDER> (including via environment variables)
     # then we'll copy your mod files into Skyrim or a mod manager for you!
 
