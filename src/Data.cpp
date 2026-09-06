@@ -534,11 +534,23 @@ bool QuickArmorRebalance::IsValidOutfitName(const std::string& name) {
     return true;
 }
 
-std::vector<RE::TESBoundObject*> QuickArmorRebalance::GetEquippedItems() {
+RE::TESAmmo* QuickArmorRebalance::GetEquippedAmmo(RE::Actor* actor) {
+    if (!actor) return nullptr;
+    auto process = actor->GetActorRuntimeData().currentProcess;
+    if (!process) return nullptr;
+
+    // Actor::GetCurrentAmmo's virtual call returned 0x1 for an NPC on AE 1.6.1170.
+    // Read the equipment process instead. This non-virtual helper checks middleHigh
+    // and does not initialize or enumerate inventory. Never treat a non-ammo form as ammo.
+    auto entry = process->GetCurrentAmmo();
+    auto object = entry ? entry->object : nullptr;
+    return object ? object->As<RE::TESAmmo>() : nullptr;
+}
+
+std::vector<RE::TESBoundObject*> QuickArmorRebalance::GetEquippedItems(RE::Actor* player) {
     logger::trace("[Data] GetEquippedItems called");
     std::vector<RE::TESBoundObject*> equipped;
 
-    auto player = RE::PlayerCharacter::GetSingleton();
     if (!player) {
         logger::warn("[Data] GetEquippedItems - player is null!");
         return equipped;
@@ -578,7 +590,7 @@ std::vector<RE::TESBoundObject*> QuickArmorRebalance::GetEquippedItems() {
 
     // Get equipped ammo
     logger::trace("[Data] GetEquippedItems - checking equipped ammo");
-    if (auto ammo = player->GetCurrentAmmo()) {
+    if (auto ammo = GetEquippedAmmo(player)) {
         if (IsValidItem(ammo)) {
             equipped.push_back(ammo);
             logger::trace("[Data] GetEquippedItems - found ammo: {}", ammo->GetName());

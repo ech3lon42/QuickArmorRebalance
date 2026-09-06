@@ -304,6 +304,10 @@ bool QuickArmorRebalance::Config::Load() {
             g_Config.verbosity = std::clamp(config["settings"]["verbosity"].value_or((int)g_Config.verbosity), 0, spdlog::level::n_levels - 1);
             g_Config.bCloseConsole = config["settings"]["closeconsole"].value_or(true);
             g_Config.bPauseWhileOpen = config["settings"]["pause"].value_or(true);
+            g_Config.bNPCDetection = config["settings"]["npcDetection"].value_or(false);
+            g_Config.bNPCPersistence = g_Config.bNPCDetection && config["settings"]["npcPersistence"].value_or(false);
+            g_Config.npcDetectionRange = NPCTargets::Rules::ClampRadius(
+                config["settings"]["npcDetectionRange"].value_or(NPCTargets::Rules::defaultRadius));
             g_Config.bAutoDeleteGiven = config["settings"]["autodelete"].value_or(false);
             g_Config.bRoundWeight = config["settings"]["roundweights"].value_or(false);
             g_Config.bResetSliders = config["settings"]["resetsliders"].value_or(true);
@@ -1070,6 +1074,9 @@ void QuickArmorRebalance::Config::Save() {
                                  {"verbosity", g_Config.verbosity},
                                  {"closeconsole", g_Config.bCloseConsole},
                                  {"pause", g_Config.bPauseWhileOpen},
+                                 {"npcDetection", g_Config.bNPCDetection},
+                                 {"npcPersistence", g_Config.bNPCDetection && g_Config.bNPCPersistence},
+                                 {"npcDetectionRange", NPCTargets::Rules::ClampRadius(g_Config.npcDetectionRange)},
                                  {"autodelete", g_Config.bAutoDeleteGiven},
                                  {"roundweights", g_Config.bRoundWeight},
                                  {"resetsliders", g_Config.bResetSliders},

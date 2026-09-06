@@ -10,6 +10,7 @@
 #include "Enchantments.h"
 #include "ModIntegrations.h"
 #include "Serialization.h"
+#include "NPCTargets.h"
 
 namespace QuickArmorRebalance {
     std::mt19937 RNG;
@@ -29,11 +30,15 @@ namespace QuickArmorRebalance {
 
         SKSE::GetMessagingInterface()->RegisterListener([](SKSE::MessagingInterface::Message* message) {
             switch (message->type) {
+                case SKSE::MessagingInterface::kPreLoadGame:
+                    NPCTargets::Suspend();
+                    break;
                 case SKSE::MessagingInterface::kDataLoaded:
                     OnDataLoaded();
                     break;
                 case SKSE::MessagingInterface::kPostLoadGame:
                 case SKSE::MessagingInterface::kNewGame:
+                    NPCTargets::Resume();
                     // Load item tracking for the current character
                     if (auto player = RE::PlayerCharacter::GetSingleton()) {
                         const char* name = player->GetName();
@@ -113,6 +118,7 @@ namespace QuickArmorRebalance {
         }
 
         InstallEnchantmentHooks();
+        NPCTargets::Initialize();
 
         //AnalyzeAllArmor();
     }

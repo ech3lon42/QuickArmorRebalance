@@ -3,6 +3,7 @@
 //   https://github.com/Pentalimbed/cathub/tree/cathub-ng
 
 #include "ImGUIIntegration.h"
+#include "NPCTargets.h"
 
 #include <dinput.h>
 #include <dxgi.h>
@@ -138,6 +139,8 @@ struct DXGIPresentHook {
 
     static void thunk(std::uint32_t a_p1) {
         func(a_p1);
+
+        QuickArmorRebalance::NPCTargets::Tick(g_showImGui);
 
         if (g_LoadFontCallback) {
             g_LoadFontCallback();

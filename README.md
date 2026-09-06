@@ -1,5 +1,13 @@
 A fork of QuickArmorRebalance for Skyrim Special Edition with improved mod browsing, equipment and armor management.
 
+## Nearby NPC outfits
+
+Enable **NPC Detection** in the main window, choose an NPC in **Target**, then use the existing outfit/item controls. Choose **Player** to return to player equipment. **Save NPC** writes that placed NPC's equipped outfit to a separate shared file; **Outfit Persistence** reapplies saved outfits nearby even with the UI closed.
+
+Both toggles default to off. Temporary spawned NPCs can be dressed but cannot be saved across characters. See [NPC outfit behavior and in-game testing](docs/npc-outfits.md) for scope, limitations, file locations, and the verification checklist.
+
+Use **Detection Range** to adjust the radius from 512 to 16,384 game units (default 4096). The setting is saved automatically; larger ranges still only include loaded NPCs.
+
 ## Building
 
 Initialize the pinned CommonLibSSE-NG dependency after cloning or switching to this branch:

@@ -2,6 +2,7 @@
 
 #include "ArmorSetBuilder.h"
 #include "Data.h"
+#include "NPCOutfitRules.h"
 
 #define PATH_ROOT "Data/SKSE/Plugins/" PLUGIN_NAME "/"
 #define PATH_CONFIGS "config/"
@@ -320,6 +321,9 @@ namespace QuickArmorRebalance {
         bool bPreventDistributionOfDynamicVariants = true;
         bool bEnableConsoleHook = true;
         bool bPauseWhileOpen = true;
+        bool bNPCDetection = false;
+        bool bNPCPersistence = false;
+        int npcDetectionRange = NPCTargets::Rules::defaultRadius;
         bool bShowAllRecipeConditions = false;
         bool bEnableRegionalLoot = true;
         bool bEnableCrossRegionLoot = true;

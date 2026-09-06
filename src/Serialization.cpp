@@ -1,6 +1,7 @@
 #include "Serialization.h"
 #include "Data.h"
 #include "UI.h"
+#include "NPCTargets.h"
 
 namespace QuickArmorRebalance {
 
@@ -268,6 +269,7 @@ namespace QuickArmorRebalance {
     }
 
     static void RevertCallback(SKSE::SerializationInterface* a_intfc) {
+        NPCTargets::Suspend();
         logger::info("Serialization: Reverting - clearing tracked armors");
         g_TrackedArmors.clear();
         g_RecreatedArmors.clear();

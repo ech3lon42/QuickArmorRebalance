@@ -1,4 +1,5 @@
 #include "UI.h"
+#include "NPCTargets.h"
 
 #include "ArmorChanger.h"
 #include "ArmorSetBuilder.h"
@@ -380,6 +381,9 @@ static std::string g_LastEquippedOutfit;
 // Cache for dynamically created enhanced armor forms
 // Key: "baseFormID:enchFormID:armorRating:weight:value"
 static std::unordered_map<std::string, RE::TESObjectARMO*> g_EnhancedArmorCache;
+// NPC recipes use a separate cache: background persistence must not mutate the
+// player's UI cache or register NPC equipment in the player's cosave.
+static std::unordered_map<std::string, RE::TESObjectARMO*> g_NPCEnhancedArmorCache;
 
 // Create a cache key for enhanced armor
 std::string MakeEnhancedArmorKey(RE::TESObjectARMO* baseArmor, const EnhancedItemConfig& config) {
@@ -397,13 +401,19 @@ std::string MakeEnhancedArmorKey(RE::TESObjectARMO* baseArmor, const EnhancedIte
 }
 
 // Create a dynamically duplicated armor form with enchantment and/or modified stats
-RE::TESObjectARMO* CreateEnhancedArmor(RE::TESObjectARMO* baseArmor, const EnhancedItemConfig& config) {
+RE::TESObjectARMO* CreateEnhancedArmor(RE::TESObjectARMO* baseArmor, const EnhancedItemConfig& config, bool trackPlayer) {
     if (!baseArmor || !config.IsEnhanced()) return nullptr;
 
     // Check cache first
     std::string cacheKey = MakeEnhancedArmorKey(baseArmor, config);
-    auto cacheIt = g_EnhancedArmorCache.find(cacheKey);
-    if (cacheIt != g_EnhancedArmorCache.end()) {
+    auto& cache = trackPlayer ? g_EnhancedArmorCache : g_NPCEnhancedArmorCache;
+    static std::uint64_t npcCacheGeneration = 0;
+    if (!trackPlayer && npcCacheGeneration != NPCTargets::Generation()) {
+        cache.clear();
+        npcCacheGeneration = NPCTargets::Generation();
+    }
+    auto cacheIt = cache.find(cacheKey);
+    if (cacheIt != cache.end()) {
         logger::trace("CreateEnhancedArmor: Using cached form for {}", baseArmor->GetName());
         return cacheIt->second;
     }
@@ -427,7 +437,7 @@ RE::TESObjectARMO* CreateEnhancedArmor(RE::TESObjectARMO* baseArmor, const Enhan
             if (auto enchantment = enchForm->As<RE::EnchantmentItem>()) {
                 enhancedArmor->formEnchanting = enchantment;
                 // Track this so we can clean up if the dynamic form is lost on reload
-                TrackAppliedEnchantment(enhancedArmor, enchantment, baseArmor);
+                if (trackPlayer) TrackAppliedEnchantment(enhancedArmor, enchantment, baseArmor);
                 logger::trace("CreateEnhancedArmor: Applied enchantment {} to {}",
                     enchantment->GetName(), baseArmor->GetName());
             }
@@ -461,7 +471,8 @@ RE::TESObjectARMO* CreateEnhancedArmor(RE::TESObjectARMO* baseArmor, const Enhan
     }
 
     // Cache the enhanced form for reuse
-    g_EnhancedArmorCache[cacheKey] = enhancedArmor;
+    cache[cacheKey] = enhancedArmor;
+    NPCTargets::RegisterEnhanced(enhancedArmor, baseArmor, config);
     logger::info("CreateEnhancedArmor: Created enhanced {} (cache key: {})",
         baseArmor->GetName(), cacheKey);
 
@@ -469,10 +480,20 @@ RE::TESObjectARMO* CreateEnhancedArmor(RE::TESObjectARMO* baseArmor, const Enhan
 }
 
 struct GivenItems {
+    bool NPCAction(NPCTargets::Action action, RE::TESBoundObject* item = nullptr, bool equip = false, bool reuse = false,
+                   const EnhancedItemConfig* enhancement = nullptr) {
+        if (!NPCTargets::IsNPC()) return false;
+        NPCTargets::Request(action, item, equip, reuse, enhancement);
+        g_EquipmentChanged = true;
+        g_Pause.SkipFrame();
+        return true;
+    }
+
     void UnequipCurrent() {
+        if (NPCAction(NPCTargets::Action::UnequipAll)) return;
         logger::trace("[GUI] UnequipCurrent called");
         stored.clear();
-        if (auto player = RE::PlayerCharacter::GetSingleton()) {
+        if (auto player = NPCTargets::GetActor()) {
             logger::trace("[GUI] UnequipCurrent - using GetWornArmor for each slot");
             // Use GetWornArmor() for each biped slot instead of GetInventory()
             // This avoids the TESObjEx plugin hook crash
@@ -497,7 +518,7 @@ struct GivenItems {
 
     // Check if an armor item is currently worn by checking all biped slots
     // Avoids GetInventory() which can crash with other SKSE plugins
-    bool IsArmorWorn(RE::TESObjectARMO* armor, RE::PlayerCharacter* player) {
+    bool IsArmorWorn(RE::TESObjectARMO* armor, RE::Actor* player) {
         if (!armor || !player) return false;
         for (int slot = 0; slot < 32; slot++) {
             auto bipedSlot = static_cast<RE::BGSBipedObjectForm::BipedObjectSlot>(1 << slot);
@@ -514,19 +535,20 @@ struct GivenItems {
         logger::trace("[GUI] FindInInventory called for item: {}", item ? item->GetName() : "null");
         if (!item) return false;
 
-        auto player = RE::PlayerCharacter::GetSingleton();
+        auto player = NPCTargets::GetActor();
         if (!player) {
             logger::warn("[GUI] FindInInventory - player is null!");
             return false;
         }
 
-        auto count = player->GetItemCount(item);
+        auto count = NPCTargets::ItemCount(player, item);
         logger::trace("[GUI] FindInInventory - item count: {}", count);
         return count > 0;
     }
 
     void Unequip(RE::TESBoundObject* item) {
-        auto player = RE::PlayerCharacter::GetSingleton();
+        if (NPCAction(NPCTargets::Action::Unequip, item)) return;
+        auto player = NPCTargets::GetActor();
         if (!player) return;
 
         if (auto armor = item->As<RE::TESObjectARMO>()) recentEquipSlots &= ~(ArmorSlots)armor->GetSlotMask().underlying();
@@ -539,8 +561,11 @@ struct GivenItems {
     }
 
     void Equip(RE::TESBoundObject* item) {
-        auto player = RE::PlayerCharacter::GetSingleton();
-        if (!player) return;
+        if (NPCAction(NPCTargets::Action::Equip, item)) return;
+        auto player = NPCTargets::GetActor();
+        if (!player || !item) return;
+        const auto handle = player->GetHandle();
+        const auto generation = NPCTargets::Generation();
 
         if (auto armor = item->As<RE::TESObjectARMO>()) {
             auto slots = (unsigned int)armor->GetSlotMask().underlying();
@@ -548,11 +573,20 @@ struct GivenItems {
                 recentEquipSlots |= slots;
 
                 // Not using AddTask will result in it not un-equipping current items
-                SKSE::GetTaskInterface()->AddTask(
-                    [=]() { RE::ActorEquipManager::GetSingleton()->EquipObject(player, item, nullptr, 1, armor->GetEquipSlot(), false, false, false); });
+                SKSE::GetTaskInterface()->AddTask([handle, generation, item, armor]() {
+                    if (generation != NPCTargets::Generation()) return;
+                    auto actor = handle.get();
+                    auto manager = RE::ActorEquipManager::GetSingleton();
+                    if (actor && manager) manager->EquipObject(actor.get(), item, nullptr, 1, armor->GetEquipSlot(), false, false, false);
+                });
             }
         } else {
-            SKSE::GetTaskInterface()->AddTask([=]() { RE::ActorEquipManager::GetSingleton()->EquipObject(player, item); });
+            SKSE::GetTaskInterface()->AddTask([handle, generation, item]() {
+                if (generation != NPCTargets::Generation()) return;
+                auto actor = handle.get();
+                auto manager = RE::ActorEquipManager::GetSingleton();
+                if (actor && manager) manager->EquipObject(actor.get(), item);
+            });
         }
 
         g_EquipmentChanged = true;  // Signal cache refresh needed
@@ -563,20 +597,28 @@ struct GivenItems {
     }
 
     void Restore() {
+        if (NPCAction(NPCTargets::Action::Restore)) return;
         if (stored.empty()) return;
 
-        SKSE::GetTaskInterface()->AddTask([=]() {
+        auto target = NPCTargets::GetActor();
+        if (!target) return;
+        auto handle = target->GetHandle();
+        auto generation = NPCTargets::Generation();
+        auto restoreItems = std::move(stored);
+        stored.clear();
+        SKSE::GetTaskInterface()->AddTask([handle, generation, restoreItems = std::move(restoreItems)]() {
+            if (generation != NPCTargets::Generation()) return;
             auto manager = RE::ActorEquipManager::GetSingleton();
-            auto player = RE::PlayerCharacter::GetSingleton();
-            if (!player) return;
+            auto actor = handle.get();
+            auto player = actor.get();
+            if (!player || !manager) return;
 
-            for (auto i : stored) {
+            for (auto i : restoreItems) {
                 RE::BGSEquipSlot* equipSlot = nullptr;
                 if (auto e = i->As<RE::BGSEquipType>()) equipSlot = e->GetEquipSlot();
 
                 manager->EquipObject(player, i, nullptr, 1, equipSlot, false, false, false);
             }
-            stored.clear();
         });
 
         for (int f = 0; f < static_cast<int>(g_Config.outfitFrameMultiplier); f++) {
@@ -586,10 +628,11 @@ struct GivenItems {
 
     void Give(RE::TESBoundObject* item, bool equip = false, bool reuse = false, bool isEnhanced = false,
               const std::string& baseFormID = "", const std::string& enhancementKey = "") {
+        if (NPCAction(NPCTargets::Action::Give, item, equip, reuse)) return;
         if (RE::UI::GetSingleton()->IsItemMenuOpen()) return;  // Can cause crashes
         if (!item) return;
 
-        auto player = RE::PlayerCharacter::GetSingleton();
+        auto player = NPCTargets::GetActor();
         if (!player) return;
 
         if (!reuse || !FindInInventory(item)) {
@@ -615,6 +658,7 @@ struct GivenItems {
     // Give item with enchantment and/or modified stats from enhanced config
     // Creates a dynamic duplicate form with the enhancements baked in
     void GiveEnhanced(RE::TESBoundObject* item, const EnhancedItemConfig& config, bool equip = false) {
+        if (NPCAction(NPCTargets::Action::Give, item, equip, true, &config)) return;
         if (RE::UI::GetSingleton()->IsItemMenuOpen()) return;
         if (!item) return;
 
@@ -646,11 +690,12 @@ struct GivenItems {
     }
 
     void ToggleEquip(RE::TESBoundObject* item) {
+        if (NPCAction(NPCTargets::Action::Toggle, item)) return;
         // if (RE::UI::GetSingleton()->IsItemMenuOpen()) return;  //I think this is safe, only if we're not adding /
         // removing from the list
         if (!item) return;
 
-        auto player = RE::PlayerCharacter::GetSingleton();
+        auto player = NPCTargets::GetActor();
         if (!player) return;
 
         if (FindInInventory(item)) {
@@ -683,9 +728,10 @@ struct GivenItems {
     }
 
     void Remove(RE::TESBoundObject* item) {
+        if (NPCAction(NPCTargets::Action::Remove, item)) return;
         if (RE::UI::GetSingleton()->IsItemMenuOpen()) return;  // Can cause crashes
 
-        auto player = RE::PlayerCharacter::GetSingleton();
+        auto player = NPCTargets::GetActor();
         if (!player) return;
 
         auto it = std::find_if(items.begin(), items.end(), [=](auto& i) { return i.second == item; });
@@ -700,9 +746,10 @@ struct GivenItems {
     }
 
     void Remove() {
+        if (NPCAction(NPCTargets::Action::RemoveAll)) return;
         if (RE::UI::GetSingleton()->IsItemMenuOpen()) return;  // Can cause crashes
 
-        auto player = RE::PlayerCharacter::GetSingleton();
+        auto player = NPCTargets::GetActor();
         if (!player) return;
 
         for (auto i : items) {
@@ -717,10 +764,11 @@ struct GivenItems {
     }
 
     void Pop(bool unequip = false) {
+        if (NPCAction(NPCTargets::Action::Undo)) return;
         if (RE::UI::GetSingleton()->IsItemMenuOpen()) return;  // Can cause crashes
 
         if (items.empty()) return;
-        auto player = RE::PlayerCharacter::GetSingleton();
+        auto player = NPCTargets::GetActor();
         if (!player) return;
 
         auto t = items.back().first;
@@ -735,7 +783,10 @@ struct GivenItems {
             TrackRemovedItem(item);  // Update tracking
 
             // AddTask isn't strictly needed, but other mods were crashing if an unequip was called first and the item was deleted
-            SKSE::GetTaskInterface()->AddTask([player, item = items.back().second]() { player->RemoveItem(item, 1, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr); });
+            SKSE::GetTaskInterface()->AddTask([handle = player->GetHandle(), generation = NPCTargets::Generation(), item = items.back().second]() {
+                if (generation != NPCTargets::Generation()) return;
+                if (auto actor = handle.get()) actor->RemoveItem(item, 1, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
+            });
             items.pop_back();
             for (int f = 0; f < static_cast<int>(g_Config.outfitFrameMultiplier); f++) {
                 g_Pause.SkipFrame();
@@ -746,9 +797,10 @@ struct GivenItems {
     // Remove all tracked items from the player's inventory (except those marked to keep)
     // This removes items that were given in previous sessions too
     void RemoveAllTracked() {
+        if (NPCAction(NPCTargets::Action::RemoveAll)) return;
         if (RE::UI::GetSingleton()->IsItemMenuOpen()) return;  // Can cause crashes
 
-        auto player = RE::PlayerCharacter::GetSingleton();
+        auto player = NPCTargets::GetActor();
         if (!player) return;
 
         // Build list of items to remove (excludes marked to keep)
@@ -972,11 +1024,20 @@ struct EquippedSlotsCache {
     int nextSlotToCheck = 0;
     static constexpr int SLOTS_PER_FRAME = 4;  // Check 4 slots per frame (full refresh every 8 frames)
     bool needsFullRefresh = true;  // Start with a full refresh
+    RE::FormID lastActorID = 0;
+    std::uint64_t lastGeneration = 0;
 
-    void Refresh(RE::PlayerCharacter* player, bool forceFullRefresh = false) {
+    void Refresh(RE::Actor* player, bool forceFullRefresh = false) {
+        const auto actorID = player ? player->GetFormID() : 0;
+        if (actorID != lastActorID || NPCTargets::Generation() != lastGeneration) {
+            needsFullRefresh = true;
+            lastActorID = actorID;
+            lastGeneration = NPCTargets::Generation();
+        }
         if (!player) {
             occupiedSlots = 0;
             slotToArmor.clear();
+            needsFullRefresh = true;
             return;
         }
 
@@ -1441,7 +1502,7 @@ bool GetCurrentListItems(std::set<ModData*>& curMod, int nModSpecial, const Item
         switch (nModSpecial) {
             case ModSpecial_Worn:
                 logger::trace("[GUI] GetCurrentListItems - ModSpecial_Worn: getting player");
-                if (auto player = RE::PlayerCharacter::GetSingleton()) {
+                if (auto player = NPCTargets::GetActor()) {
                     logger::trace("[GUI] GetCurrentListItems - ModSpecial_Worn: using GetWornArmor for each slot");
                     // Use GetWornArmor() for each biped slot instead of GetInventory()
                     // This avoids the TESObjEx plugin hook crash
@@ -1472,7 +1533,7 @@ bool GetCurrentListItems(std::set<ModData*>& curMod, int nModSpecial, const Item
                         }
                     }
                     // Check equipped ammo
-                    if (auto ammo = player->GetCurrentAmmo()) {
+                    if (auto ammo = GetEquippedAmmo(player)) {
                         if (IsValidItem(ammo) && filter.Pass(ammo)) {
                             if (std::find(data.filteredItems.begin(), data.filteredItems.end(), ammo) == data.filteredItems.end()) {
                                 data.filteredItems.push_back(ammo);
@@ -1845,6 +1906,7 @@ struct RecipeConditionals {
 int g_inventoryStartupDelay = 5;
 
 void QuickArmorRebalance::RenderUI() {
+    NPCTargets::FrameTarget targetFrame;
     static bool bFirstFrame = true;
     if (bFirstFrame) {
         logger::trace("[GUI] RenderUI called for first time this session");
@@ -1871,6 +1933,32 @@ void QuickArmorRebalance::RenderUI() {
     static int mainItemsSortColumn = 0;  // 0=Name, 1=Slot, 2=Armor, 3=ID
     static bool mainItemsSortAscending = true;
     static RE::TESBoundObject* keyboardNav = nullptr;
+
+    auto syncTarget = [&]() {
+        static std::uint64_t lastRevision = 0, lastGeneration = 0;
+        static RE::FormID lastTarget = 0;
+        auto actor = NPCTargets::GetActor();
+        const auto targetID = actor ? actor->GetFormID() : 0;
+        const bool changed = lastTarget != targetID || lastGeneration != NPCTargets::Generation();
+        if (changed || lastRevision != NPCTargets::Revision()) {
+            g_EquipmentChanged = true;
+            ++g_filterRound;
+            lastRevision = NPCTargets::Revision();
+        }
+        if (changed) {
+            selectedItems.clear();
+            lastSelectedItem = nullptr;
+            keyboardNav = nullptr;
+            givenItems.items.clear();
+            givenItems.stored.clear();
+            givenItems.recentEquipSlots = 0;
+            g_LastEquippedOutfit.clear();
+            lastTarget = targetID;
+            lastGeneration = NPCTargets::Generation();
+        }
+    };
+    // Refresh before keyboard shortcuts, and again after the target controls below.
+    syncTarget();
 
     if (!RE::UI::GetSingleton()->numPausesGame) givenItems.recentEquipSlots = 0;
 
@@ -2091,6 +2179,9 @@ void QuickArmorRebalance::RenderUI() {
 
             // ImGui::PushItemWidth(-FLT_MIN);
             ImGui::SetNextItemWidth(-FLT_MIN);
+
+            NPCTargets::DrawControls();
+            syncTarget();
 
             if (ImGui::BeginTable("WindowTable", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV)) {
                 ImGui::TableSetupColumn("LeftCol", ImGuiTableColumnFlags_WidthStretch);
@@ -2337,7 +2428,7 @@ void QuickArmorRebalance::RenderUI() {
                         if (++slotCacheFrameCounter >= SLOT_CACHE_REFRESH_FRAMES) {
                             slotCacheFrameCounter = 0;
                             playerEquippedSlots = 0;
-                            if (auto player = RE::PlayerCharacter::GetSingleton()) {
+                            if (auto player = NPCTargets::GetActor()) {
                                 for (int slot = 0; slot < 32; slot++) {
                                     auto bipedSlot = static_cast<RE::BGSBipedObjectForm::BipedObjectSlot>(1 << slot);
                                     if (player->GetWornArmor(bipedSlot)) {
@@ -3303,7 +3394,7 @@ void QuickArmorRebalance::RenderUI() {
                                                         }
 
                                                         // Get currently equipped items
-                                                        auto equipped = GetEquippedItems();
+                                                        auto equipped = GetEquippedItems(NPCTargets::GetActor());
 
                                                         // Create outfit from equipped items
                                                         Outfit newOutfit;
@@ -3495,7 +3586,7 @@ void QuickArmorRebalance::RenderUI() {
                                             ImVec2 tableSize(-FLT_MIN, std::max(100.0f, itemsListHeight)); // Minimum 100px for items, full width
 
                                             // Get player for slot conflict detection
-                                            auto outfitPlayer = RE::PlayerCharacter::GetSingleton();
+                                            auto outfitPlayer = NPCTargets::GetActor();
 
                                             // Pre-compute equipped slots cache with incremental refresh (optimization)
                                             static EquippedSlotsCache outfitEquippedCache;
@@ -3774,21 +3865,25 @@ void QuickArmorRebalance::RenderUI() {
                                                                 auto& config = outfit.enhancedItems[itemFormID];
                                                                 if (auto armor = item->As<RE::TESObjectARMO>()) {
                                                                     // Get or create the enhanced armor
-                                                                    auto enhancedArmor = CreateEnhancedArmor(armor, config);
-                                                                    if (enhancedArmor) {
-                                                                        // Check if equipping or unequipping
-                                                                        bool wasWorn = givenItems.IsArmorWorn(enhancedArmor, RE::PlayerCharacter::GetSingleton());
-                                                                        // Toggle the enhanced version
-                                                                        givenItems.ToggleEquip(enhancedArmor);
-                                                                        // Track for cosave if we just equipped
-                                                                        if (!wasWorn) {
-                                                                            TrackEquippedEnhancedArmor(armor, enhancedArmor, config, true);
-                                                                        } else {
-                                                                            UntrackEnhancedArmor(enhancedArmor);
-                                                                        }
+                                                                    if (NPCTargets::IsNPC()) {
+                                                                        givenItems.NPCAction(NPCTargets::Action::Toggle, armor, false, true, &config);
                                                                     } else {
-                                                                        // Fallback to base item
-                                                                        givenItems.ToggleEquip(item);
+                                                                        auto enhancedArmor = CreateEnhancedArmor(armor, config);
+                                                                        if (enhancedArmor) {
+                                                                            // Check if equipping or unequipping
+                                                                            bool wasWorn = givenItems.IsArmorWorn(enhancedArmor, NPCTargets::GetActor());
+                                                                            // Toggle the enhanced version
+                                                                            givenItems.ToggleEquip(enhancedArmor);
+                                                                            // Track for cosave if we just equipped
+                                                                            if (!wasWorn) {
+                                                                                TrackEquippedEnhancedArmor(armor, enhancedArmor, config, true);
+                                                                            } else {
+                                                                                UntrackEnhancedArmor(enhancedArmor);
+                                                                            }
+                                                                        } else {
+                                                                            // Fallback to base item
+                                                                            givenItems.ToggleEquip(item);
+                                                                        }
                                                                     }
                                                                 } else {
                                                                     givenItems.ToggleEquip(item);
@@ -3902,7 +3997,7 @@ void QuickArmorRebalance::RenderUI() {
                                                                     auto slotsCombined = slotsCur | slotsOrig;
 
                                                                     // Get player's equipped armor for each slot
-                                                                    auto tooltipPlayer = RE::PlayerCharacter::GetSingleton();
+                                                                    auto tooltipPlayer = NPCTargets::GetActor();
 
                                                                     if (slotsCombined) {
                                                                         for (int slot = 0; slot < 32; slot++) {
@@ -4198,7 +4293,7 @@ void QuickArmorRebalance::RenderUI() {
                                         }
 
                                         // Get currently equipped items
-                                        auto equipped = GetEquippedItems();
+                                        auto equipped = GetEquippedItems(NPCTargets::GetActor());
 
                                         // Create outfit
                                         Outfit outfit;
@@ -4258,7 +4353,7 @@ void QuickArmorRebalance::RenderUI() {
                                         }
 
                                         // Get currently equipped items
-                                        auto equipped = GetEquippedItems();
+                                        auto equipped = GetEquippedItems(NPCTargets::GetActor());
 
                                         // Create outfit
                                         Outfit outfit;
@@ -4603,19 +4698,8 @@ void QuickArmorRebalance::RenderUI() {
                                         inventoryArmorCache.clear();
                                         inventoryCacheFrame = currentFrame;
 
-                                        if (auto player = RE::PlayerCharacter::GetSingleton()) {
-                                            // Iterate over all armor forms and check if player has them
-                                            auto dataHandler = RE::TESDataHandler::GetSingleton();
-                                            if (dataHandler) {
-                                                auto& armors = dataHandler->GetFormArray<RE::TESObjectARMO>();
-                                                for (auto* armor : armors) {
-                                                    if (!armor) continue;
-                                                    // Check if player has this armor using GetItemCount (safe method)
-                                                    if (player->GetItemCount(armor) > 0) {
-                                                        inventoryArmorCache.push_back(armor);
-                                                    }
-                                                }
-                                            }
+                                        if (auto player = NPCTargets::GetActor()) {
+                                            inventoryArmorCache = NPCTargets::InventoryArmor(player);
 
                                             // Sort by name
                                             std::sort(inventoryArmorCache.begin(), inventoryArmorCache.end(),
@@ -5139,7 +5223,7 @@ void QuickArmorRebalance::RenderUI() {
                     auto avail = ImGui::GetContentRegionAvail();
                     avail.y -= ImGui::GetFontSize() * 1 + ImGui::GetStyle().FramePadding.y * 2;
 
-                    auto player = RE::PlayerCharacter::GetSingleton();
+                    auto player = NPCTargets::GetActor();
 
                     data.items.clear();
                     data.items.reserve(data.filteredItems.size());
@@ -5230,8 +5314,8 @@ void QuickArmorRebalance::RenderUI() {
 
                             // Remove All Tracked Items context menu entry
                             {
-                                int totalTracked = g_ItemTracking.GetTotalGivenCount();
-                                int removableCount = g_ItemTracking.GetRemovableCount();
+                                int totalTracked = NPCTargets::IsNPC() ? NPCTargets::TrackedCount() : g_ItemTracking.GetTotalGivenCount();
+                                int removableCount = NPCTargets::IsNPC() ? NPCTargets::TrackedCount() : g_ItemTracking.GetRemovableCount();
                                 std::string label;
                                 if (totalTracked > 0) {
                                     label = LZFormat("Remove All Tracked Items ({})", removableCount);
@@ -5265,10 +5349,10 @@ void QuickArmorRebalance::RenderUI() {
                                         else anyUnmarked = true;
                                     }
 
-                                    if (anyUnmarked && ImGui::Selectable(LZ("Mark to Keep"))) {
+                                    if (!NPCTargets::IsNPC() && anyUnmarked && ImGui::Selectable(LZ("Mark to Keep"))) {
                                         for (auto i : selectedItems) MarkItemToKeep(i, true);
                                     }
-                                    if (anyMarked && ImGui::Selectable(LZ("Unmark to Keep"))) {
+                                    if (!NPCTargets::IsNPC() && anyMarked && ImGui::Selectable(LZ("Unmark to Keep"))) {
                                         for (auto i : selectedItems) MarkItemToKeep(i, false);
                                     }
                                 }
@@ -5703,7 +5787,7 @@ void QuickArmorRebalance::RenderUI() {
                                             auto slotsCombined = slotsCur | slotsOrig;
 
                                             // Get player's equipped armor for each slot
-                                            auto player = RE::PlayerCharacter::GetSingleton();
+                                            auto player = NPCTargets::GetActor();
 
                                             if (slotsCombined) {
                                                 for (int slot = 0; slot < 32; slot++) {
@@ -6027,7 +6111,7 @@ void QuickArmorRebalance::RenderUI() {
                             }
 
                             // Numpad3: Toggle "Mark to Keep" on selected items
-                            if (ImGui::IsKeyPressed(ImGuiKey_Keypad3) && !selectedItems.empty() &&
+                            if (!NPCTargets::IsNPC() && ImGui::IsKeyPressed(ImGuiKey_Keypad3) && !selectedItems.empty() &&
                                 currentTime - lastNumpadItemTime >= numpadCooldown) {
                                 for (auto j : selectedItems) {
                                     // Toggle the keep status
@@ -6240,7 +6324,7 @@ void QuickArmorRebalance::RenderUI() {
                     }
                     if (isInventoryOpen) MakeTooltip(LZ("Can't use while inventory is open"));
 
-                    ImGui::BeginDisabled(givenItems.items.empty());
+                    ImGui::BeginDisabled(NPCTargets::IsNPC() ? NPCTargets::TrackedCount() == 0 : givenItems.items.empty());
                     ImGui::SameLine();
                     if (ImGui::Button(LZ("Delete Given"))) {
                         givenItems.Remove();
@@ -6254,8 +6338,8 @@ void QuickArmorRebalance::RenderUI() {
                     // Remove All Tracked Items button - removes items given across sessions
                     // This button is OUTSIDE the curMod disabled block so it's always accessible
                     {
-                        int totalTracked = g_ItemTracking.GetTotalGivenCount();
-                        int removableCount = g_ItemTracking.GetRemovableCount();
+                        int totalTracked = NPCTargets::IsNPC() ? NPCTargets::TrackedCount() : g_ItemTracking.GetTotalGivenCount();
+                        int removableCount = NPCTargets::IsNPC() ? NPCTargets::TrackedCount() : g_ItemTracking.GetRemovableCount();
                         int keptCount = totalTracked - removableCount;
 
                         ImGui::BeginDisabled(!player || isInventoryOpen);
@@ -6276,9 +6360,11 @@ void QuickArmorRebalance::RenderUI() {
                         }
                         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
                             if (!player) {
-                                ImGui::SetTooltip(LZ("Player not available."));
+                                ImGui::SetTooltip(LZ("Selected actor not available."));
                             } else if (isInventoryOpen) {
                                 ImGui::SetTooltip(LZ("Can't use while inventory is open."));
+                            } else if (NPCTargets::IsNPC()) {
+                                ImGui::SetTooltip("Remove only quantities given to this NPC during the current nearby session.\nDoes not use the player's tracking or Keep marks; does not delete the NPC outfit file.");
                             } else if (totalTracked > 0) {
                                 ImGui::SetTooltip(LZ("Remove all items given via this UI across sessions.\n"
                                                     "Items marked 'Keep' will not be removed.\n"

@@ -475,7 +475,8 @@ namespace QuickArmorRebalance {
     bool DeleteOutfit(const std::string& name);
     bool RenameOutfit(const std::string& oldName, const std::string& newName);
     bool IsValidOutfitName(const std::string& name);
-    std::vector<RE::TESBoundObject*> GetEquippedItems();
+    RE::TESAmmo* GetEquippedAmmo(RE::Actor* actor);
+    std::vector<RE::TESBoundObject*> GetEquippedItems(RE::Actor* actor);
 
     // Tag management (outfit tags)
     std::string NormalizeTagName(const std::string& tag);
