@@ -93,7 +93,7 @@ namespace {
         // Build list of slots that will be used for scaling
         for (auto i : items) {
             if (auto armor = i->As<RE::TESObjectARMO>()) {
-                auto slots = (ArmorSlots)armor->GetSlotMask();
+                auto slots = (ArmorSlots)armor->GetSlotMask().underlying();
                 if (remap) slots = MapFindOr(g_Data.modifiedArmorSlots, armor, slots);
                 coveredSlots |= slots;
             }
@@ -116,7 +116,7 @@ namespace {
 
     void ProcessBaseArmorSet(const ArmorChangeParams& params, ArmorSlots coveredHeadSlots, const auto& fn) {
         for (auto i : params.armorSet->items) {
-            auto slots = PromoteHeadSlots((ArmorSlots)i->GetSlotMask(), coveredHeadSlots);
+            auto slots = PromoteHeadSlots((ArmorSlots)i->GetSlotMask().underlying(), coveredHeadSlots);
 
             // Handling multi-slot items makes things a giant mess, just use the lowest one instead
             // while (slots) {  // hair can cause multiple
@@ -232,6 +232,7 @@ int QuickArmorRebalance::MakeArmorChanges(const ArmorChangeParams& params) {
         // Build list of base items per slot
         auto [_discard, coveredHeadSlots] = CalcCoveredSlots(params.armorSet->items, params);
         auto [coveredSlots, coveredHeadSlotsChanges] = CalcCoveredSlots(data.items, params, true);
+        coveredSlots &= ~params.slotsCosmetic;
 
         SlotRelativeWeight slotValues[32];
 
@@ -244,6 +245,17 @@ int QuickArmorRebalance::MakeArmorChanges(const ArmorChangeParams& params) {
         for (const auto& i : params.curve->tree) PropogateBaseValues(slotValues, nullptr, &i);
         for (const auto& i : params.curve->tree) CalcCoveredValues(slotValues, coveredSlots, &i);
 
+        SlotRelativeWeight* armorBaseCosmetic = nullptr;
+        for (auto i : {32, 33, 37, 30}) {
+            if (auto base = slotValues[i - 30].base) {
+                if (base->weightBase) {
+                    armorBaseCosmetic = base;
+                    break;
+                }
+            }
+        }
+
+
         for (auto i : data.items) {
             Value changes(kObjectType);
             RE::TESBoundObject* objBase = nullptr;
@@ -253,11 +265,12 @@ int QuickArmorRebalance::MakeArmorChanges(const ArmorChangeParams& params) {
                 int weight = 0;
 
                 // Need to retrieve the original slots, or double-applying will loose data
-                ArmorSlots slotsOrig = MapFindOr(g_Data.modifiedArmorSlots, armor, (ArmorSlots)armor->GetSlotMask());
+                ArmorSlots slotsOrig = MapFindOr(g_Data.modifiedArmorSlots, armor, (ArmorSlots)armor->GetSlotMask().underlying());
                 ArmorSlots slotsRemapped = RemapSlots(slotsOrig, params);
                 ArmorSlots slots = slotsRemapped;
 
                 slots = PromoteHeadSlots(slots, coveredHeadSlotsChanges);
+                const auto slotsFinal = slots;
 
                 while (slots) {
                     unsigned long slot;
@@ -267,8 +280,13 @@ int QuickArmorRebalance::MakeArmorChanges(const ArmorChangeParams& params) {
                     auto& v = slotValues[slot];
                     if (v.base && v.base->weightBase) {
                         if (!itemBase) itemBase = v.base;
-                        weight += v.weightUsed;
+
+                        if ((1u << slot) & ~params.slotsCosmetic) weight += v.weightUsed;
                     }
+                }
+
+                if (!itemBase && (slotsFinal & params.slotsCosmetic) == slotsFinal) {
+                    itemBase = armorBaseCosmetic;
                 }
 
                 if (itemBase) {
@@ -311,7 +329,7 @@ int QuickArmorRebalance::MakeArmorChanges(const ArmorChangeParams& params) {
             if (g_Config.isFrostfallInstalled || g_Config.bShowFrostfallCoverage) changes.AddMember("coverage", Value(0.01f * params.armor.coverage), al);
             AddModification("value", params.value, changes, al);
 
-            ArmorSlots slotsOrig = MapFindOr(g_Data.modifiedArmorSlots, armor, (ArmorSlots)armor->GetSlotMask());
+            ArmorSlots slotsOrig = MapFindOr(g_Data.modifiedArmorSlots, armor, (ArmorSlots)armor->GetSlotMask().underlying());
             ArmorSlots slotsRemapped = RemapSlots(slotsOrig, params);
             if (slotsRemapped != slotsOrig) changes.AddMember("slots", slotsRemapped, al);
 
@@ -713,7 +731,7 @@ bool ChangeField(bool& bChanged, bool bAllowed, const char* field, const rapidjs
 
         if (jsonScale.IsFloat()) {
             auto scale = jsonScale.GetFloat();
-            if (src->*member && scale > 0.0f)
+            if (src->*member && wSrc > 0.0f && scale > 0.0f)
                 item->*member = fn(wSrc * scale * src->*member);
             else
                 item->*member = 0;
@@ -841,7 +859,7 @@ bool QuickArmorRebalance::ApplyChanges(const RE::TESFile* file, RE::FormID id, c
                 weight))
             return false;
 
-        if (!ChangeField<RE::TESObjectARMO>(
+        if (!ChangeField<RE::TESWeightForm>(
                 bAnyChanges, perm.bModifyWeight, "weight", changes, src, armor, &RE::TESObjectARMO::weight,
                 [=](float f) {
                     if (g_Config.bRoundWeight) f = std::max(0.1f, 0.1f * std::round(10.0f * f));
@@ -850,7 +868,7 @@ bool QuickArmorRebalance::ApplyChanges(const RE::TESFile* file, RE::FormID id, c
                 wFlat / kFlatWeightStore, weight))
             return false;
 
-        if (!ChangeField<RE::TESObjectARMO>(
+        if (!ChangeField<RE::TESValueForm>(
                 bAnyChanges, perm.bModifyValue, "value", changes, src, armor, &RE::TESObjectARMO::value, [=](float f) { return std::max(1, (int)f); }, wFlat, weight))
             return false;
 
@@ -925,7 +943,7 @@ bool QuickArmorRebalance::ApplyChanges(const RE::TESFile* file, RE::FormID id, c
                 constexpr auto ffSlots = (ArmorSlots)RE::BIPED_MODEL::BipedObjectSlot::kBody | (ArmorSlots)RE::BIPED_MODEL::BipedObjectSlot::kHead |
                                          (ArmorSlots)RE::BIPED_MODEL::BipedObjectSlot::kFeet | (ArmorSlots)RE::BIPED_MODEL::BipedObjectSlot::kHands;
 
-                if ((ArmorSlots)armor->GetSlotMask() & ffSlots) {
+                if ((ArmorSlots)armor->GetSlotMask().underlying() & ffSlots) {
                     constexpr float warmthMin[] = {1.0f, 0.9f, 0.7f, 0.55f, 0.3f};
                     constexpr float coverageMin[] = {1.0f, 0.8f, 0.6f, 0.4f, 0.2f};
 
@@ -960,7 +978,7 @@ bool QuickArmorRebalance::ApplyChanges(const RE::TESFile* file, RE::FormID id, c
 
                 GetMatchingKeywords(g_Config.kwSet, addKwds, src);
 
-                if ((unsigned int)src->GetSlotMask() & (unsigned int)armor->GetSlotMask()) {
+                if ((unsigned int)src->GetSlotMask().underlying() & (unsigned int)armor->GetSlotMask().underlying()) {
                     GetMatchingKeywords(g_Config.kwSlotSpecSet, addKwds, src);
                 }
 
@@ -998,7 +1016,7 @@ bool QuickArmorRebalance::ApplyChanges(const RE::TESFile* file, RE::FormID id, c
         auto src = objSrc->As<RE::TESObjectWEAP>();
         if (!src) return true;
 
-        if (!ChangeField<RE::TESObjectWEAP>(bAnyChanges, perm.bModifyWeapDamage, "damage", changes, src, weap, &RE::TESObjectWEAP::attackDamage,
+        if (!ChangeField<RE::TESAttackDamageForm>(bAnyChanges, perm.bModifyWeapDamage, "damage", changes, src, weap, &RE::TESObjectWEAP::attackDamage,
                                             [=](float f) { return (uint16_t)std::max(1, (int)f); }))
             return false;
 
@@ -1007,7 +1025,7 @@ bool QuickArmorRebalance::ApplyChanges(const RE::TESFile* file, RE::FormID id, c
             return false;
         if (perm.bModifyWeapDamage) weap->criticalData.prcntMult = src->criticalData.prcntMult;
 
-        if (!ChangeField<RE::TESObjectWEAP>(
+        if (!ChangeField<RE::TESWeightForm>(
                 bAnyChanges, perm.bModifyWeapWeight, "weight", changes, src, weap, &RE::TESObjectWEAP::weight,
                 [=](float f) {
                     f *= weight;
@@ -1025,7 +1043,7 @@ bool QuickArmorRebalance::ApplyChanges(const RE::TESFile* file, RE::FormID id, c
                                                   &RE::TESObjectWEAP::Data::staggerValue, [=](float f) { return f; }))
             return false;
 
-        if (!ChangeField<RE::TESObjectWEAP>(bAnyChanges, perm.bModifyValue, "value", changes, src, weap, &RE::TESObjectWEAP::value, [=](float f) { return std::max(1, (int)f); }))
+        if (!ChangeField<RE::TESValueForm>(bAnyChanges, perm.bModifyValue, "value", changes, src, weap, &RE::TESObjectWEAP::value, [=](float f) { return std::max(1, (int)f); }))
             return false;
 
         if (perm.bModifyKeywords && changes.HasMember("keywords")) {
@@ -1067,7 +1085,7 @@ bool QuickArmorRebalance::ApplyChanges(const RE::TESFile* file, RE::FormID id, c
                                         [=](float f) { return std::max(1.0f, f); }))
             return false;
 
-        if (!ChangeField<RE::TESAmmo>(bAnyChanges, perm.bModifyValue, "value", changes, src, ammo, &RE::TESAmmo::value, [=](float f) { return std::max(1, (int)f); })) return false;
+        if (!ChangeField<RE::TESValueForm>(bAnyChanges, perm.bModifyValue, "value", changes, src, ammo, &RE::TESAmmo::value, [=](float f) { return std::max(1, (int)f); })) return false;
 
         if (perm.bModifyKeywords && changes.HasMember("keywords")) {
             auto& jsonOption = changes["keywords"];
@@ -1407,9 +1425,9 @@ inline bool KeepCondition(RE::BGSConstructibleObject* recipe, RE::TESConditionIt
             case RE::FUNCTION_DATA::FunctionID::kGetItemCount:
             case RE::FUNCTION_DATA::FunctionID::kGetEquipped: {
                 auto form = (RE::TESBoundObject*)cond->data.functionData.params[0];
-                if (g_Config.bKeepCraftingBooks && recipe->requiredItems.CountObjectsInContainer(form) == 0 && form->As<RE::TESObjectBOOK>()) return true;
+                if (g_Config.bKeepCraftingBooks && recipe->requiredItems.GetObjectCount(form) == 0 && form->As<RE::TESObjectBOOK>()) return true;
                 if (opts.modeItems != ArmorChangeParams::eRequirementKeep) return false;
-                if (recipe->requiredItems.CountObjectsInContainer(form) > 0) return false;  // Need to clear materials
+                if (recipe->requiredItems.GetObjectCount(form) > 0) return false;  // Need to clear materials
                 if (opts.skipForms.contains(form)) return false;
                 if (g_Config.recipeConditionBlacklist.contains(form)) return false;
                 return true;
@@ -1430,7 +1448,7 @@ inline bool KeepCondition(RE::BGSConstructibleObject* recipe, RE::TESConditionIt
             case RE::FUNCTION_DATA::FunctionID::kGetEquipped: {
                 auto form = (RE::TESBoundObject*)cond->data.functionData.params[0];
                 if (form == replacing) return true;
-                if (recipe->requiredItems.CountObjectsInContainer((RE::TESBoundObject*)form) > 0) return true;  // Always keep materials
+                if (recipe->requiredItems.GetObjectCount((RE::TESBoundObject*)form) > 0) return true;  // Always keep materials
                 if (opts.modeItems != ArmorChangeParams::eRequirementReplace) return false;
                 if (opts.skipForms.contains(form)) return false;
                 if (g_Config.recipeConditionBlacklist.contains(form)) return false;

@@ -58,7 +58,7 @@ Value QuickArmorRebalance::MakeLootChanges(const ArmorChangeParams& params, RE::
         Value loot(kObjectType);
 
         if (auto armor = i->As<RE::TESObjectARMO>()) {
-            if (params.bDistAsSet && ((unsigned int)armor->GetSlotMask() & (unsigned int)RE::BIPED_MODEL::BipedObjectSlot::kBody) != 0) {
+            if (params.bDistAsSet && (armor->GetSlotMask().underlying() & (unsigned int)RE::BIPED_MODEL::BipedObjectSlot::kBody) != 0) {
                 if (params.bMatchSetPieces) {
                     auto s = BuildSetFrom(i, data.items);
                     if (!s.empty()) {
@@ -164,12 +164,13 @@ void QuickArmorRebalance::LoadLootChanges(RE::TESBoundObject* item, const Value&
         if (DoNotDistribute(armor)) {
             piece = nullptr;
         } else if (jsonLoot.HasMember("set")) {
+
             for (const auto& i : jsonLoot["set"].GetArray()) {
                 RE::FormID id = 0;
                 if (i.IsUint())
-                    id = GetFullId(item->GetFile(), i.GetUint());
+                    id = GetFullId(item->GetFile(0), i.GetUint());
                 else if (i.IsString()) {
-                    if (auto form = FindIn(item->GetFile(), i.GetString())) {
+                    if (auto form = FindIn(item->GetFile(0), i.GetString())) {
                         id = form->GetFormID();
                     }
                 } 
@@ -487,7 +488,7 @@ namespace {
         std::vector<RE::TESBoundObject*> pieces;
 
         for (auto i : *set) {
-            auto slots = (ArmorSlots)i->GetSlotMask();
+            auto slots = (ArmorSlots)i->GetSlotMask().underlying();
             if (!slots) continue;
             if (covered & slots) continue;
 
@@ -498,11 +499,11 @@ namespace {
             // Technically would require repeating until it stops changing, but you'd have to design an armor set just
             // to be obnoxious intentionally
             for (auto j : *set) {
-                auto slots2 = (ArmorSlots)j->GetSlotMask();
+                auto slots2 = (ArmorSlots)j->GetSlotMask().underlying();
                 if (slots & slots2) slots |= slots2;
             }
             for (auto j : *set) {
-                auto slots2 = (ArmorSlots)j->GetSlotMask();
+                auto slots2 = (ArmorSlots)j->GetSlotMask().underlying();
                 if (slots & slots2) conflicts.push_back(j);
             }
 

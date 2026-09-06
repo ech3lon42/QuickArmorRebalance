@@ -3,13 +3,23 @@
   "name": "skyrim-quickarmorrebalance",
   "version-string": "0.0.1",
   "dependencies": [
-    "commonlibsse-ng",
     "rapidjson",
+    "rapidcsv",
     {
       "name": "imgui",
       "version>=": "1.91.0",
       "features": [ "dx11-binding", "win32-binding", "freetype" ]
     },
-    "simpleini"
+    "simpleini",
+    {
+      "name": "fmt",
+      "version>=": "12.1.0"
+    },
+    {
+      "name": "spdlog",
+      "version>=": "1.16.0"
+    },
+    "directxtk",
+    "directxmath"
   ]
 }
